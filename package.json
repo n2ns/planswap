@@ -6,6 +6,7 @@
   "publisher": "n2ns",
   "private": true,
   "license": "MIT",
+  "icon": "resources/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/n2ns/planswap.git"
