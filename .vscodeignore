@@ -12,3 +12,4 @@ docs/**
 AGENTS.md
 CLAUDE.md
 .vscode/**
+.github/**

@@ -22,6 +22,9 @@ All docs, code comments and test names are written in English; user-visible stri
 
 ```
 ai-switcher/
+├── .github/
+│   └── workflows/
+│       └── publish.yml           Tag v* → publish to VS Code Marketplace and Open VSX
 ├── .vscode/
 │   ├── launch.json               F5 "Run Extension" configuration
 │   └── tasks.json                Pre-launch build task (npm run build)
@@ -66,6 +69,7 @@ ai-switcher/
 │   └── stubs/
 │       └── vscode.ts             Minimal vscode stub for tests
 ├── AGENTS.md                     This file
+├── CHANGELOG.md                  Release notes (shown on the marketplace pages)
 ├── CLAUDE.md                     Claude Code specific rules (imports AGENTS.md)
 ├── LICENSE                       MIT license
 ├── README.md                     User documentation

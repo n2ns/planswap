@@ -6,6 +6,8 @@
 
 Switch between the Claude Code and Codex subscription accounts you own (Claude Pro / Max, ChatGPT Plus / Pro…) from a VS Code sidebar, without signing out and back in. Built for VS Code WSL remote windows.
 
+> **WSL/Linux only.** Native Windows and macOS are not supported.
+
 [![VS Code](https://img.shields.io/badge/VS_Code-1.107%2B-007ACC?style=flat)](https://code.visualstudio.com/)
 [![WSL](https://img.shields.io/badge/Environment-WSL-0078D4?style=flat)](#requirements)
 [![Version](https://img.shields.io/github/package-json/v/n2ns/planswap?style=flat&label=version&cacheSeconds=10800)](https://github.com/n2ns/planswap/blob/main/package.json)
@@ -87,6 +89,10 @@ Sign-in and AI requests are handled by the official Claude Code and Codex client
 - [Feature reference](docs/features.md): every button, command and rule in detail.
 - [Claude design](docs/design.md) and [Codex design](docs/codex-design.md): how switching works and why.
 - [AGENTS.md](AGENTS.md): development, tests (`npm test`) and contribution rules.
+
+## Disclaimer
+
+PlanSwap is an independent community project and is not affiliated with, endorsed by, or sponsored by Anthropic or OpenAI.
 
 ## License
 
