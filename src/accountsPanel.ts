@@ -1,0 +1,239 @@
+import * as vscode from 'vscode';
+import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import * as os from 'node:os';
+import { DEFAULT_NAME, claudeJsonPath, readAccountInfo, samePath, type Account } from './paths';
+import { currentDir } from './claudeSettings';
+import type { AccountStore } from './accounts';
+import { EXTERNAL_NAME, labelFor, type LabelStore } from './labels';
+import type { AccountView, FromWebview, PanelMode, PanelState, TabState, ToWebview } from './protocol';
+import { getLocale } from './i18n';
+
+export const VIEW_ID = 'aiSwitcher.accounts';
+
+const ACTIVE_TAB_KEY = 'panel.activeTab';
+
+/** Data source of a panel tab; Claude and Codex each implement it */
+export interface PanelSource {
+  // Each implementation handles the "external directory" row itself; label is already filled in
+  accounts(): AccountView[];
+  enabled(): boolean;
+  // Returns a display name
+  pendingDir(): string | undefined;
+  // Absolute paths of files to watch (claude: claudeJsonPath of each dir; codex: auth.json of each dir + the state file)
+  watchTargets(): string[];
+}
+
+/** Claude data source: appends an "external directory" row when the current dir matches no registered account */
+export function claudePanelSource(store: AccountStore, labels: LabelStore): PanelSource {
+  const accounts = (): AccountView[] => {
+    const cur = currentDir();
+    const rows: AccountView[] = store.all().map((a) => ({
+      kind: a.name === DEFAULT_NAME ? 'default' : 'named',
+      name: a.name,
+      label: labelFor(a.name, labels),
+      dir: a.dir,
+      dirLabel: tildify(a.dir),
+      ...readAccountInfo(a.dir),
+      isCurrent: samePath(a.dir, cur),
+    }));
+    if (!rows.some((r) => r.isCurrent)) {
+      rows.push({
+        kind: 'external',
+        name: EXTERNAL_NAME,
+        label: labelFor(EXTERNAL_NAME, labels),
+        dir: cur,
+        dirLabel: tildify(cur),
+        ...readAccountInfo(cur),
+        isCurrent: true,
+      });
+    }
+    return rows;
+  };
+  return {
+    accounts,
+    enabled: () => true,
+    pendingDir: () => undefined,
+    watchTargets: () => accounts().map((r) => claudeJsonPath(r.dir)),
+  };
+}
+
+type Handler = (msg: FromWebview) => void | Promise<void>;
+
+export class AccountsPanel implements vscode.WebviewViewProvider, vscode.Disposable {
+  private view?: vscode.WebviewView;
+  private readonly handlers: Partial<Record<PanelMode, Handler>> = {};
+  private switchedTo?: string;
+  // Focus request received before the panel page is ready
+  private pendingFocusAdd?: PanelMode;
+  private ready = false;
+  private readonly changed = new vscode.EventEmitter<void>();
+  // Fires when accounts or watched files change, so the status bar can sync
+  readonly onDidChange = this.changed.event;
+  // Keyed by the absolute path of the watched file
+  private readonly watchers = new Map<string, vscode.Disposable>();
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly sources: { claude: PanelSource; codex: PanelSource },
+    private readonly memento: vscode.Memento,
+  ) {
+    this.syncWatchers();
+  }
+
+  setHandler(mode: PanelMode, handler: Handler): void {
+    this.handlers[mode] = handler;
+  }
+
+  get visible(): boolean {
+    return this.view?.visible ?? false;
+  }
+
+  get activeTab(): PanelMode {
+    return this.memento.get<PanelMode>(ACTIVE_TAB_KEY) === 'codex' ? 'codex' : 'claude';
+  }
+
+  /** Account rows currently displayed */
+  accounts(mode: PanelMode): AccountView[] {
+    return this.sources[mode].accounts();
+  }
+
+  /** Finds a displayed account by directory; only accepts directories present in the list */
+  resolve(mode: PanelMode, dir: string): (Account & { kind: AccountView['kind'] }) | undefined {
+    const row = this.accounts(mode).find((r) => samePath(r.dir, dir));
+    return row && { name: row.name, dir: row.dir, kind: row.kind };
+  }
+
+  /** claude only */
+  setSwitchedTo(label: string | undefined): void {
+    this.switchedTo = label;
+    this.refresh();
+  }
+
+  /** Both tabs: sync watchers + push the full state */
+  refresh(): void {
+    this.syncWatchers();
+    this.pushState();
+  }
+
+  post(msg: ToWebview): void {
+    void this.view?.webview.postMessage(msg);
+  }
+
+  focusAdd(mode: PanelMode): void {
+    void vscode.commands.executeCommand(`${VIEW_ID}.focus`).then(() => {
+      if (this.ready) this.post({ type: 'focusAdd', mode });
+      else this.pendingFocusAdd = mode;
+    });
+  }
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    const media = vscode.Uri.joinPath(this.extensionUri, 'dist', 'media');
+    // Set the CSP page before options; the reverse order loads an empty page first and triggers a "missing CSP" warning
+    view.webview.html = this.html(view.webview, media);
+    view.webview.options = { enableScripts: true, localResourceRoots: [media] };
+    view.webview.onDidReceiveMessage((msg: FromWebview) => {
+      if (msg.type === 'ready') {
+        this.ready = true;
+        this.pushState();
+        if (this.pendingFocusAdd) {
+          const mode = this.pendingFocusAdd;
+          this.pendingFocusAdd = undefined;
+          this.post({ type: 'focusAdd', mode });
+        }
+      } else if (msg.type === 'setTab') {
+        void this.memento.update(ACTIVE_TAB_KEY, msg.mode);
+      } else void this.handlers[msg.mode]?.(msg);
+    });
+    view.onDidChangeVisibility(() => {
+      if (view.visible) this.pushState();
+    });
+    view.onDidDispose(() => {
+      if (this.view === view) {
+        this.view = undefined;
+        this.ready = false;
+      }
+    });
+  }
+
+  dispose(): void {
+    for (const w of this.watchers.values()) w.dispose();
+    this.watchers.clear();
+    this.changed.dispose();
+  }
+
+  private tabState(mode: PanelMode): TabState {
+    const source = this.sources[mode];
+    return {
+      enabled: source.enabled(),
+      accounts: source.accounts(),
+      switchedTo: mode === 'claude' ? this.switchedTo : undefined,
+      pendingDir: source.pendingDir(),
+    };
+  }
+
+  private pushState(): void {
+    const state: PanelState = {
+      active: this.activeTab,
+      locale: getLocale(),
+      claude: this.tabState('claude'),
+      codex: this.tabState('codex'),
+    };
+    this.post({ type: 'state', state });
+    this.changed.fire();
+  }
+
+  private html(webview: vscode.Webview, media: vscode.Uri): string {
+    const nonce = randomBytes(16).toString('base64');
+    const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(media, file)).toString();
+    const csp = [
+      "default-src 'none'",
+      `font-src ${webview.cspSource}`,
+      // Lit components fall back to inline <style> when adoptedStyleSheets is unsupported
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `script-src 'nonce-${nonce}'`,
+    ].join('; ');
+    return `<!DOCTYPE html>
+<html lang="${getLocale() === 'zh-cn' ? 'zh-CN' : 'en'}">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${uri('codicon.css')}" id="vscode-codicon-stylesheet">
+<link rel="stylesheet" href="${uri('panel-style.css')}">
+</head>
+<body>
+<div id="app"></div>
+<script nonce="${nonce}" src="${uri('panel.js')}"></script>
+</body>
+</html>`;
+  }
+
+  // Keep the watcher set equal to the union of both sources' watchTargets(); watcher callbacks only push state (no re-sync) to avoid loops
+  private syncWatchers(): void {
+    const files = new Set([...this.sources.claude.watchTargets(), ...this.sources.codex.watchTargets()]);
+    for (const [file, w] of this.watchers) {
+      if (!files.has(file)) {
+        w.dispose();
+        this.watchers.delete(file);
+      }
+    }
+    for (const file of files) {
+      if (this.watchers.has(file)) continue;
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(path.dirname(file)), path.basename(file)),
+      );
+      const fire = () => this.pushState();
+      this.watchers.set(
+        file,
+        vscode.Disposable.from(watcher, watcher.onDidCreate(fire), watcher.onDidChange(fire), watcher.onDidDelete(fire)),
+      );
+    }
+  }
+}
+
+export function tildify(dir: string): string {
+  const home = os.homedir();
+  return dir === home || dir.startsWith(home + path.sep) ? '~' + dir.slice(home.length) : dir;
+}

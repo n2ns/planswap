@@ -1,0 +1,249 @@
+# AGENTS.md
+
+For AI coding agents working in this repository.
+
+## Project overview
+
+A WSL-only VS Code extension ("PlanSwap: Claude Code & Codex Account Switcher", identifier `planswap`, sidebar title "AI Account Switcher") that switches Claude Code and Codex accounts from a Webview panel in the sidebar; the two parts are independent. The Claude part rewrites `CLAUDE_CONFIG_DIR` in the official extension's setting `claudeCode.environmentVariables`, one configuration directory per account (default `~/.claude`, others `~/.claude-<name>`). The Codex part sets `CODEX_HOME` from the state file `~/.config/ai-switcher/codex-home` through marker blocks in `~/.profile` and `~/.bashrc` (default `~/.codex`, others `~/.codex-<name>`); a switch only takes effect after Antigravity's WSL server is restarted. The UI is localized in English and Simplified Chinese (setting `aiSwitcher.language`).
+
+Authoritative documents (read them before changing code):
+
+- `docs/design.md`: design, background facts, known limitations, localization (section 5.5).
+- `docs/interfaces.md`: module interface contract; implementations must follow its signatures exactly. The contract describes behavior and signatures, but it is not a reason to keep dead code: exports, fields and parameters confirmed to have zero references may be deleted, and the contract documents must be updated in the same change.
+- `docs/features.md`: user-facing behavior (section 10 is Codex, section 11 is language).
+- `docs/codex-design.md`: design of Codex account switching, background facts (section 2), known limitations (section 12).
+- `docs/codex-interfaces.md`: interface contract of the Codex modules.
+
+When documents and code disagree, first determine which side needs updating; do not unilaterally change the docs to match the code or vice versa.
+
+All docs, code comments and test names are written in English; user-visible strings live in the i18n tables.
+
+## Directory structure
+
+```
+ai-switcher/
+├── .vscode/
+│   ├── launch.json               F5 "Run Extension" configuration
+│   └── tasks.json                Pre-launch build task (npm run build)
+├── docs/
+│   ├── design.md                 Claude design, background facts, i18n (5.5)
+│   ├── interfaces.md             Module interface contract
+│   ├── features.md               User-facing behavior
+│   ├── codex-design.md           Codex design
+│   └── codex-interfaces.md       Codex module contract
+├── resources/
+│   └── account.svg               Activity bar icon
+├── scripts/
+│   └── run-tests.mjs             Test runner (esbuild bundle + node --test)
+├── src/
+│   ├── extension.ts              Activation entry and wiring
+│   ├── i18n.ts                   Host i18n tables and t() (no vscode import)
+│   ├── i18nVscode.ts             Locale resolution and watching (vscode glue)
+│   ├── paths.ts                  Claude data layer (no vscode import)
+│   ├── accounts.ts               AccountStore (globalState account list)
+│   ├── labels.ts                 LabelStore (display names / aliases)
+│   ├── claudeSettings.ts         CLAUDE_CONFIG_DIR in claudeCode.environmentVariables
+│   ├── accountsPanel.ts          Single WebviewViewProvider for both tabs
+│   ├── protocol.ts               Extension ↔ Webview message types
+│   ├── statusBar.ts              Claude status bar item
+│   ├── commands.ts               Claude flows and commands
+│   ├── tools.ts                  Toolbar and "Tools" row actions
+│   ├── codex/
+│   │   ├── codexPaths.ts         Codex data layer (no vscode import)
+│   │   ├── codexState.ts         State file, rc marker blocks, self-check
+│   │   ├── codexServer.ts        Locate and restart the WSL server
+│   │   ├── codexStore.ts         CodexAccountStore
+│   │   └── codexCommands.ts      Codex flows, commands and panel source
+│   └── webview/
+│       ├── main.ts               Webview frontend
+│       ├── i18n.ts               Webview i18n tables and t()
+│       ├── panel.css             Panel styles (theme variables only)
+│       └── tsconfig.json         Frontend type-check config
+├── test/
+│   ├── *.test.ts                 Unit tests for the pure modules (node:test)
+│   ├── helpers.ts                Temporary HOME helpers
+│   ├── tsconfig.json             Test type-check config
+│   └── stubs/
+│       └── vscode.ts             Minimal vscode stub for tests
+├── AGENTS.md                     This file
+├── CLAUDE.md                     Claude Code specific rules (imports AGENTS.md)
+├── LICENSE                       MIT license
+├── README.md                     User documentation
+├── esbuild.mjs                   Two-entry bundling (host + Webview)
+├── package.json                  Manifest (static strings as %key% placeholders)
+├── package.nls.json              English static strings
+├── package.nls.zh-cn.json        Chinese static strings
+├── tsconfig.json                 Host type-check config (excludes src/webview)
+├── .vscodeignore                 Files excluded from the vsix
+└── .gitignore
+```
+
+## Module responsibilities
+
+| Module | Responsibility |
+|---|---|
+| `src/extension.ts` | Activation entry. Resolves the locale, applies the platform guard, creates the `AccountStore` (with `syncWithDisk`), the two `LabelStore`s (`claude.labels` / `codex.labels`), the single `AccountsPanel` (via `registerWebviewViewProvider`) and the status bar, registers the command groups, and watches setting changes (the Claude setting and `aiSwitcher.language`). |
+| `src/i18n.ts` | Host-side i18n without a `vscode` import, so pure modules can use it. Exports `Locale` (`'en' \| 'zh-cn'`), `setLocale` / `getLocale` and `t(key, params)` with `{name}` placeholders. The `en` table is the source of truth; the `zh-cn` table must have exactly the same keys (type-checked). |
+| `src/i18nVscode.ts` | The `vscode` glue for i18n. `resolveLocale()` reads `aiSwitcher.language` and `vscode.env.language`; `watchLocale(onChange)` calls `setLocale` and then `onChange` when the setting changes. |
+| `src/paths.ts` | Claude data layer without a `vscode` import. Provides the default directory, account directories, the account info file location, email and plan reading (`formatClaudePlan` / `readAccountInfo`, from `oauthAccount` `emailAddress` / `organizationType` / `organizationRateLimitTier`), sign-in state, scanning of `~/.claude-*`, copying and stripping `settings.json`, global rules links (`linkRulesFile` / `linkGlobalRules`), delete safety checks and deletion. |
+| `src/accounts.ts` | `AccountStore`: stores the account list in globalState `accounts` and prepends the default account at runtime; keeps the `ignoredDirs` ignore list. |
+| `src/tools.ts` | Panel tools: open the global `CLAUDE.md` / `AGENTS.md`, open extension settings, reload the window, restart the extension host, show CLI and extension versions (`execFile --version`, no shell), sync rules; restarting the WSL server is delegated to `codexCommands`. |
+| `src/labels.ts` | `LabelStore`: stores and validates per-account display names (aliases), keyed by account name in globalState `claude.labels` / `codex.labels` (`Record<name, label>`). On first read it migrates the legacy keys `claude.defaultLabel` / `codex.defaultLabel` to `{ default: <old value> }` and deletes them. Also exports `labelFor(name, labels)` and `EXTERNAL_NAME` (the internal sentinel of the external-directory row). |
+| `src/claudeSettings.ts` | Reads and writes `CLAUDE_CONFIG_DIR` in `claudeCode.environmentVariables`; `currentDir()` is the single source of truth for the current account. |
+| `src/accountsPanel.ts` | The single `WebviewViewProvider` (view id `aiSwitcher.accounts`). It receives the two `PanelSource`s `{ claude, codex }` (`accounts` / `enabled` / `pendingDir` / `watchTargets`), generates the panel HTML and CSP, pushes the full `PanelState` (active tab, locale and both `TabState`s), remembers the current tab (memento `panel.activeTab`), maintains file watchers for the union of both `watchTargets`, and dispatches handlers by message `mode`. `claudePanelSource` is defined here. |
+| `src/protocol.ts` | Message types between the extension and the Webview, shared by both sides; types only, no runtime imports. Defines `PanelMode`, `AccountView` (`name` / `label` / `email` / `plan`), `TabState`, `PanelState` (including `locale`) and the `setTab` / `rename` / `renameResult` / `focusAdd` / `versions` messages. |
+| `src/statusBar.ts` | The status bar item `$(account) Claude: <label>` (Claude only). It shows the alias; the tooltip contains email and plan. |
+| `src/commands.ts` | Claude switch / add / remove / open terminal / refresh / rename. Handles Claude page messages (`setHandler('claude')`), registers the Command Palette entries and tracks the terminals created by this extension. Refresh also refreshes the Codex store and page. Exports `shQuote`. |
+| `src/codex/codexPaths.ts` | Codex data layer without a `vscode` import. Provides the default directory `~/.codex` (ignores environment variables), account directories, whether `auth.json` exists, and read-only `auth.json` parsing for email and plan (`readCodexAccountInfo` / `decodeJwtPayload` / `formatCodexPlan`; only the `tokens.id_token` payload is decoded, without a signature check). It scans `~/.codex-*`, copies the seed `config.toml` (`copyCodexSeed`, blocking forbidden keys and `[model_providers.` sections), links `AGENTS.md` (`linkGlobalRules`), and implements the delete safety check `checkCodexSafeToDelete` (including daemon liveness) and `deleteCodexDir`. |
+| `src/codex/codexState.ts` | Atomic reads/writes of the state file `~/.config/ai-switcher/codex-home`, `effectiveDir` (the extension host's `process.env.CODEX_HOME`), rc marker block detection (`rcStatus`: `hasBlock` / `hasUserExport` / `broken`), the pre-check `preCheck`, atomic `installRcBlocks`, `removeRcBlocks` (throws when the end marker is missing) and the self-check `selfCheck` (`bash -i -l`). The rc block text is never localized. |
+| `src/codex/codexServer.ts` | Locates and triple-checks Antigravity's WSL server (`planRestart`) and sends `SIGTERM` to the server and its children (`executeRestart`); also contains the `/proc` parsing helpers. |
+| `src/codex/codexStore.ts` | `CodexAccountStore`: globalState `codex.accounts` / `codex.ignoredDirs`, with the same shape as `AccountStore`. |
+| `src/codex/codexCommands.ts` | `codexPanelSource`; enable / disable / switch / add / remove / terminal / restart server / rename. Handles Codex page messages (`setHandler('codex')`), registers the Command Palette entries and exports `restartServerInteractive`. |
+| `src/webview/main.ts` | The Webview frontend. Renders the Claude / Codex tab bar (`setTab`) and, per page, the disabled page, the "takes effect after restart" banner, the reload banner, the account list (current account pinned to the first row and highlighted, with a current badge after the name; every non-external row has a pencil button for inline renaming, with the edit state keyed by `dir`), the "Tools" row and the add section. Also renders the footer toolbar and the version card, validates input live, and sends/receives messages (all with `mode`). |
+| `src/webview/i18n.ts` | Webview i18n: its own `en` / `zh-cn` tables (same key-parity rule) and `t(key, params)` using the current `state.locale`. |
+| `src/webview/panel.css` | Panel styles; colors only come from `--vscode-*` theme variables. |
+| `src/webview/tsconfig.json` | Frontend type-check config (lib includes DOM; includes `../protocol.ts`). |
+| `package.nls.json` / `package.nls.zh-cn.json` | English / Chinese static strings for `package.json` `%key%` placeholders: display name, description, command titles and categories, view container and view names, configuration. |
+| `test/` | Unit tests (`node:test`) for the pure modules: `*.test.ts`, `helpers.ts` (temporary HOME), `stubs/vscode.ts` (vscode stub), `tsconfig.json`. |
+| `scripts/run-tests.mjs` | Test runner: bundles `test/*.test.ts` with esbuild into `.test-out/` (with `vscode` aliased to `test/stubs/vscode.ts`) and runs `node --test`. |
+| `esbuild.mjs` | Two-entry bundling: `src/extension.ts` → `dist/extension.js` (cjs, node20, external vscode); `src/webview/main.ts` and `panel.css` → `dist/media/panel.js` and `panel-style.css` (iife, browser); also copies `codicon.css` / `codicon.ttf` to `dist/media`. |
+
+Module constraints: TypeScript strict; ESM-style imports.
+
+- Extension host (`src/*.ts`): Node built-in modules are imported with the `node:` prefix; may only depend on `vscode` and Node built-ins. Modules documented as "no vscode import" (including `i18n.ts`) must stay that way.
+- Webview frontend (`src/webview/`): may only depend on `@vscode-elements/elements`, `@vscode/codicons` and types from `../protocol.ts`; must not import `vscode` or Node modules.
+- All messages between the extension and the frontend are typed in `src/protocol.ts`.
+
+## Commands
+
+```bash
+npm install
+npm run typecheck    # tsc --noEmit for host (root), src/webview and test
+npm test             # scripts/run-tests.mjs: bundle test/*.test.ts, run node --test
+npm run build        # bundle host to dist/extension.js, frontend to dist/media/
+npm run watch        # esbuild watch (both entries)
+npm run package      # vsce package (prepublish runs typecheck and build)
+```
+
+- `typecheck` runs `tsc --noEmit` three times: the host with the root `tsconfig.json`, the frontend with `-p src/webview`, and the tests with `-p test`.
+- `test` bundles `test/*.test.ts` with esbuild into `.test-out/` and runs them with `node --test` (`node:test`, no extra framework).
+- `build` also copies `codicon.css` / `codicon.ttf` into `dist/media/`; `package` produces the `.vsix`.
+
+Before committing, at least `npm run typecheck`, `npm test` and `npm run build` must pass.
+
+Build notes:
+
+- Frontend artifacts live in `dist/media/`: `panel.js`, `panel-style.css`, `codicon.css`, `codicon.ttf`. The Webview's `localResourceRoots` only contains `dist/media`, so every file the frontend needs must be emitted there.
+- `.vscodeignore` excludes `node_modules/`, so frontend dependencies must be bundled by esbuild or copied into `dist/media` by `esbuild.mjs`; they cannot be loaded from `node_modules` at runtime. `package.nls.json` and `package.nls.zh-cn.json` must stay in the package (not excluded).
+- Regular builds minify the frontend without sourcemaps; `watch` mode does not minify and emits sourcemaps.
+- Tests only cover the pure modules (paths, labels, claudeSettings, codexPaths, codexState, codexServer); every test that touches the file system runs under a temporary HOME created by `test/helpers.ts` (`makeTempHome`, which also asserts that the real home is not used). UI behavior is still verified manually (see the checklist below).
+
+## Key constraints
+
+- **Never read or write `.credentials.json`**: only "does the file exist" may be used to help determine sign-in state; never read its content, copy it or cache any token.
+- **Never modify the contents of `~/.claude` / `~/.codex` (the default directories)**, with one exception: when the global rules file (`CLAUDE.md` / `AGENTS.md`) is missing, an empty file is created as the target of other accounts' symlinks. When adding an account, only `settings.json` / `config.toml` are read from the default directory as templates.
+- **Do not use `claudeCode.claudeProcessWrapper`** (reasons in design.md section 2 item 5).
+- **WSL/Linux only**: on non-linux platforms activation only shows a warning and returns; never read across into `/mnt/c`; do not write Windows/macOS branches.
+- **Use the latest stable dependency versions, pinned exactly**: no `^`/`~` in `package.json` (except `engines.vscode`); before adding a dependency, confirm it is really necessary. The only runtime dependencies are the frontend's `@vscode-elements/elements` 2.5.1 and `@vscode/codicons` 0.0.45 (the npm `latest` tag of codicons points to the prerelease 0.0.46-24, which does not satisfy the component library's peer dependency `>=0.0.40`, so the latest stable 0.0.45 is pinned); the host still only depends on `vscode` and Node built-ins.
+- **The Webview content security policy must not be relaxed**: `script-src` nonce only; `style-src` allows the webview source and `'unsafe-inline'` (Lit components fall back to inline `<style>` when adoptedStyleSheets is not supported); `font-src` webview source only; `default-src 'none'`; `localResourceRoots` only `dist/media`.
+- **Deleting a directory must go through `checkSafeToDelete`**: only via `paths.deleteAccountDir`; never bypass the check, never call a shell (`rm -rf` etc.).
+- The single source of truth for the current account is `CLAUDE_CONFIG_DIR` in the setting; never store a "current account" in globalState or anywhere else.
+- **Account aliases only affect display**: every registered account (including `default`, except the external-directory row) can have an alias, stored by account name in `globalState` `claude.labels` / `codex.labels` (`Record<name, label>`), read and validated through the `LabelStore` in `labels.ts` (legacy keys `claude.defaultLabel` / `codex.defaultLabel` are migrated automatically on first read); the directory and internal name do not change, logic (switch, remove, compare) always uses name / dir, and user-visible text (panel, status bar, QuickPick, messages, terminal names) always uses `labelFor(name, labels)`. Aliases and new account names must not equal the name or label of another account of the same vendor (the same name across vendors is allowed); when removing an account, also call `labels.remove(name)` to clear its alias.
+- **Codex: `auth.json` is read-only; only the JWT payload of `tokens.id_token` is decoded (no signature check) for the email and `chatgpt_plan_type`; never copy, swap, cache, log or output any token**: the raw `access_token` / `refresh_token` / `id_token` must never reach logs, globalState, messages or the UI; never write `auth.json`. API key mode only shows "API key". Never modify anything inside `~/.codex`; when adding an account only `config.toml` is read from it as a starting point (`AGENTS.md` is symlinked, not copied).
+- **Deleting a Codex directory must go through `checkCodexSafeToDelete`**: only via `codexPaths.deleteCodexDir`; never bypass the check (including the daemon liveness check), never call a shell.
+- **`executeRestart` may only be called after a modal confirmation by the user, and never in tests**: it sends `SIGTERM` to Antigravity's WSL server and all its children, disconnecting every WSL window and closing integrated terminals (including running Claude Code sessions). Do not signal the server process in any other way as a test either. `planRestart` only reads `/proc` and the pid file and may be called on its own.
+- **Codex file-system tests may only run under a temporary HOME** (e.g. `HOME=$(mktemp -d)`): `installRcBlocks`, `removeRcBlocks`, `writeSelectedDir`, `selfCheck`, `copyCodexSeed`, `linkGlobalRules` and `deleteCodexDir` write files under the real home directory; never run them under the real `~`.
+- The single source of truth for the effective Codex directory is the extension host's `process.env.CODEX_HOME` (`effectiveDir`); the selected account is whatever the state file says; do not store it anywhere else.
+- **Localization**: every user-visible string goes through the i18n tables: `t()` from `src/i18n.ts` on the host (messages, errors, warnings, modal text and buttons, QuickPick labels and placeholders, status bar, reasons returned by pure modules) and `t()` from `src/webview/i18n.ts` in the Webview. The `en` table is the source of truth; the `zh-cn` table must have exactly the same keys (enforced by the type checker). Never localize the rc marker block (`codexState.rcBlock()`, written to user files, must stay byte-identical), shell commands, file names, setting ids, command ids or terminal names (`Claude (<label>)` / `Codex (<label>)`). Static `package.json` strings use `%key%` placeholders resolved from `package.nls.json` / `package.nls.zh-cn.json`.
+
+## Official extension behavior relied upon
+
+Sources: the official extension `anthropic.claude-code-2.1.282-linux-x64` source code and the official Claude Code documentation (details in design.md section 2). **Re-verify all of the following after upgrading the official extension.**
+
+1. `CLAUDE_CONFIG_DIR` determines the location of `.credentials.json`, `.claude.json`, `settings.json`, `projects/`, `sessions/`; user-level MCP servers are in `mcpServers` of `.claude.json`.
+2. `claudeCode.environmentVariables`: scope `machine`, array of `{ name, value }`; the parser also accepts the object form and converts non-string values to strings; an entry for `CLAUDE_CONFIG_DIR` with an empty value is skipped; the official extension reads this setting fresh every time it starts a claude process and never writes it itself.
+3. The official extension watches `CLAUDE_CONFIG_DIR` changes and calls `refreshEveryHost` about 1 second later; every panel header immediately shows the new account, but processes of open sessions still use the old account.
+4. Open sessions do not follow a switch; after a reload the panels start over with the new account, and old session transcripts stay in `projects/` of the old directory.
+5. Under WSL2 sign-in uses the "paste code" flow; switching to a signed-out directory makes the official panel show its sign-in screen automatically.
+6. The `ide/` lock file directory only follows the extension host's `process.env.CLAUDE_CONFIG_DIR`, so the `/ide` integration is expected not to work when `claude` is run in a terminal for a non-default account.
+7. Writing a machine-scope setting with `ConfigurationTarget.Global` in a WSL remote window lands in the remote Machine settings; this requires the official extension to be installed on the WSL side, otherwise `update` throws; it also throws when the remote settings.json has a syntax error.
+
+### Codex and the Antigravity server
+
+Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.chatgpt-26.908.40401` extension source code, `microsoft/vscode` 1.107.0 source code, the local Antigravity server and startup scripts (details in codex-design.md section 2). **Re-verify all of the following after upgrading Codex, the Codex extension or Antigravity.**
+
+1. All local Codex state lives in `CODEX_HOME` (default `~/.codex`); when the variable is set the directory must already exist, and the path is resolved through symlinks. `auth.json` is isolated per directory.
+2. The app-server reads `CODEX_HOME` once at startup and then caches credentials in memory; there is no interface to reload authentication or change the directory, so changing accounts requires restarting the process.
+3. Signing in to a new account in the same `CODEX_HOME` revokes the authorization of the account previously in that directory; one directory per account avoids this.
+4. Refresh tokens are single-use and rotated, and `auth.json` is not written atomically, so the file is never copied or swapped.
+5. The Codex view of a WSL window is provided by the extension instance in the WSL-side extension host; the codex processes it starts get their environment from the extension host's `process.env`; with remote type `wsl` the extension does not probe the shell environment itself, and it has no setting to inject environment variables.
+6. The environment of the WSL remote extension host is resolved by the server through a login shell (`bash -i -l -c`) and cached for the server's lifetime; restarting the extension host or reloading a window does not resolve it again. `bash -i -l` reads `~/.profile` (when neither `~/.bash_profile` nor `~/.bash_login` exists) and does not read `~/.bashrc` directly; integrated terminals are interactive bash and source `~/.bashrc` again.
+7. Antigravity's WSL server: the startup script runs on every window connection and uses the pid file `~/.antigravity-ide-server/.<commit>.pid` (which records the wrapper script's pid; its child `node out/server-main.js` is the server) to decide whether the server is running; it runs with `--enable-remote-auto-shutdown` and exits 300 seconds after the last window disconnects; there is one server per distribution, user and version, shared by all WSL windows.
+8. The server's node process has no SIGTERM handler and exits on receipt; the extension host has a parent-process guard and exits by itself within about 1 second; the pty host has no parent-process guard, lingers, and must be terminated as well.
+9. After the server dies, the client starts a new server when reconnecting, but the old reconnection token is not accepted, so every window shows "Cannot reconnect. Please reload the window."; Antigravity has no "restart server" command.
+10. The daemon liveness check relies on the JSON format codex writes to `<dir>/app-server-daemon/*.pid` (`pid`, `processIdentity.startTicks` / `processStartTime`); re-verify after codex upgrades.
+
+## Notes when making changes
+
+- **Adaptive sidebar width is a hard requirement**: every frontend change must be checked in the preview page at five widths: 200, 240, 280, 340 and 420px: no horizontal scroll bar, text that does not fit wraps or is ellipsized (names, emails, directories, version values, banner text), button groups never overlap text, and the layout works on both sides of the container-query breakpoint (340px). Check both languages (English strings are usually longer). Put screenshots and assertions in the report. During preview verification every agent (the main agent and each subagent, independently, never shared) opens exactly one browser tab for the whole task and reuses it afterwards with navigate_page (reload or change URL parameters) instead of opening new tabs; when done, close the one tab you opened and stop the static server by PID.
+
+- In `resolveWebviewView`, `webview.html` (with CSP) must be set before `webview.options`. In the reverse order the editor first loads an empty page and logs "created a webview without a content security policy".
+- A "focus the add input" request received before the panel page has sent `ready` must be queued and sent after `ready`, otherwise it is lost.
+
+- Always read or watch the account info file through `claudeJsonPath(dir)`: for the default account without `CLAUDE_CONFIG_DIR`, that file is `~/.claude.json`, not `~/.claude/.claude.json`.
+
+- `engines.vscode` and `@types/vscode` are pinned to 1.107 (the user uses Antigravity IDE, whose core is VS Code 1.107.0). Do not upgrade these two to the latest version, or the extension will be refused by the user's editor. Other dependencies may use the latest stable version. This constraint still applies with the Webview; new frontend dependencies must not require newer editor APIs.
+
+- The frontend only renders and exchanges messages; business logic and validation are authoritative on the extension side, and frontend validation is only an immediate hint. When the extension receives a panel message it must validate it itself (account directories checked via `panel.resolve`, account names via `validateName`); never trust the frontend.
+- All frontend text is written through `textContent`; never build HTML with `innerHTML` from account names, emails, paths, etc.
+- The `<link>` for `codicon.css` must keep `id="vscode-codicon-stylesheet"`; `vscode-icon` and other components rely on it to load the icon font.
+
+- When writing the setting, **build a new array**; never mutate the object returned by `get()`; keep other entries as they are (no filtering, no value changes), remove all `CLAUDE_CONFIG_DIR` entries and then append as needed; convert the object form to an array when writing back.
+- Always compare with the default directory using `sameRealPath` (symlinks resolved), so the real path of the default directory is never treated as a normal account and deleted.
+- When an account is removed but its directory kept, the directory is recorded in `globalState` `ignoredDirs` and `syncWithDisk` skips it; `add` removes it from the ignore list.
+- Paths are always **absolute** after `path.resolve`, without `~` and without a trailing slash; compare paths with `samePath`.
+- Always obtain the default directory through `defaultDir()` (respects an existing `CLAUDE_CONFIG_DIR` in the extension host); never hard-code `~/.claude`.
+- Reading `.claude.json` must tolerate a missing or half-written file; parse failures must not throw.
+- User-visible text (dialogs, messages, panel text, status bar, QuickPick) is never hard-coded: add a key to the `en` table and the matching `zh-cn` entry (host `src/i18n.ts` or Webview `src/webview/i18n.ts`) and use `t()`. Command titles, categories and view names go into `package.nls.json` and `package.nls.zh-cn.json`.
+- Wrap `config.update` in try/catch and show an actionable reason on failure.
+- When changing commands, menus, views, settings or panel interactions, also check `contributes` in `package.json`, the `package.nls*.json` files, `src/protocol.ts` and `docs/features.md`.
+
+## Manual verification checklist
+
+`npm test` covers the pure modules only; after a change, verify the UI manually in a **WSL window**. Two ways:
+
+- **Install the vsix**: `npm run package`, then in the WSL window run `Extensions: Install from VSIX...`, install and reload.
+- **Extension Development Host**: open this repository in a WSL window and press F5 (the "Run Extension" configuration). `.vscode/tasks.json` runs `npm run build` first and then starts the Extension Development Host window. For frontend problems run `Developer: Open Webview Developer Tools` in the development host to see the console (e.g. CSP errors). If the vsix of this extension is installed, disable it in the development host first to avoid duplicate command and view registrations.
+
+This checklist creates and deletes directories under the real `~` and is performed by the user personally; agents must never perform its write or delete steps in the real home directory themselves. Using test accounts is recommended to avoid deleting real account directories by mistake. Checks:
+
+1. **Activation**: the "AI Account Switcher" icon appears in the activity bar; when opened there is exactly one "AI Account Switcher" view with the Claude / Codex tab bar at the top; the Claude page shows the "All accounts" list (current account in the first row and highlighted) (including the `default` row, correct count badge), the "Tools" row and the add-account section at the bottom; the footer toolbar is pinned to the bottom; the title bar only has the refresh button; icons render (codicon font loaded); the Webview developer tools console shows no CSP errors; the status bar shows `Claude: default` (or the current account). Switch between light and dark themes and confirm the panel colors follow.
+2. **Tab switching**: click the Codex tab and confirm the page switches and the selected state is highlighted; after closing and reopening the panel (or reloading) the last selected tab is still active; run "Add Account (Focus Sidebar Input)" from the Command Palette and confirm it switches back to the Claude tab and focuses the input; run "Add Codex Account" and confirm it switches to the Codex tab and focuses its input; the inputs of the two pages do not affect each other.
+3. **Email and plan**: signed-in Claude account rows show the email and plan (e.g. `Max 20x`, `Pro`), and the first line of the status bar tooltip is "email · plan"; when `~/.claude.json` has no `organizationType`, no plan is shown and no error occurs.
+4. **Rename**: click the pencil icon of the `default` row and confirm the name turns into an input prefilled with `default`; enter blank / more than 32 characters / another account's name / another account's display name / the external-directory name ("External directory" and "外部目录"), confirm the reason is shown in red inline and nothing changes; Esc cancels and restores the row; enter `work-main` and press Enter, confirm the row, the status bar and the Command Palette QuickPick all show `work-main`, and that the `~/.claude` directory is unchanged and still cannot be removed; type `work-main` in the add input and confirm it is rejected as "same as an existing account's display name"; then enter `default` and press Enter to restore the default name. Repeat for a non-default row (e.g. `test1`): it can be renamed as well, the directory `~/.claude-test1` is unchanged, switching and the terminal command still use the original directory; the external-directory row has no pencil button; remove an account that has an alias, add an account with the same name again and confirm the alias was cleared. Repeat on the Codex page and confirm the aliases of the two pages are independent and both pages may use the same alias.
+5. **Add**: type invalid names in the bottom input (e.g. `a b`, `default`, an existing account name) and confirm the input turns red, the help line shows the reason and the add button is disabled; type `test1` and press Enter, confirm the input is cleared, `test1` appears in the list, `~/.claude-test1` was created (mode 0700); if the default directory has `settings.json`, confirm the copy in the new directory has the keys listed in design.md 6.2 stripped; confirm `~/.claude-test1/CLAUDE.md` is a symlink to `~/.claude/CLAUDE.md`; `~/.claude` is unchanged (except an empty `CLAUDE.md` created if it was missing). Run "Add Account (Focus Sidebar Input)" from the Command Palette and confirm it opens the panel and focuses the input.
+6. **Switch**: click the switch button of the `test1` row (also verify that double-clicking the row and pressing Enter after focusing it with Tab switch as well, and that a single click does nothing); confirm the remote Machine setting `claudeCode.environmentVariables` contains `CLAUDE_CONFIG_DIR` with the absolute path and other entries are kept; no notification is shown, and a "Switched to test1" banner appears at the top of the panel; the current-account highlight and the status bar update; a new session in the official panel shows its sign-in screen. Click the banner's close button and confirm the banner disappears without reloading; switch again and click "Reload Window" and confirm the window reloads. Collapse or hide the panel and switch from the Command Palette; confirm a notification with a "Reload Window" button is shown instead. Switch back to `default` and confirm the entry is removed.
+7. **Terminal sign-in**: click the terminal button of the `test1` row, confirm the terminal is named `Claude (test1)` and the command sent is `env CLAUDE_CONFIG_DIR='<absolute path>' claude`; after signing in the row shows email and plan, and the "Not logged in" tag and the sign-in hint disappear.
+8. **Remove**: click the remove button of the `test1` row and confirm the row turns into an inline confirmation; click Cancel and the row is restored; click remove again and confirm, then a system modal asks whether to delete the directory; confirm the directory is deleted. Also verify: removing `test1` while it is current is not possible (no remove button); removing from the Command Palette first shows a modal confirmation; the default row and the external-directory row have no remove button; refused paths (symlinked directory, default directory) are not deleted.
+9. **External directory**: set `CLAUDE_CONFIG_DIR` by hand to an unregistered directory and confirm an "External directory" row (avatar `?`) appears, is current and pinned to the first row, can be switched away from, has a terminal button ("Log in" button when signed out) and no remove button. Also confirm that no current account ever has a remove button.
+10. **Auto-discovery**: create `~/.claude-foo` by hand, then click refresh or reload and confirm it is registered automatically; remove that account keeping the directory, click refresh and confirm it is not registered again.
+11. **Errors**: introduce a syntax error into the remote settings.json and switch; confirm a reason is shown instead of a silent failure; make the target path of an add a regular file with the same name and confirm the help line shows "Failed to create account directory" and nothing is registered.
+12. **Tools row and Sync rules**: on each page click the `CLAUDE.md` / `AGENTS.md` button and confirm the current (effective) account's global rules file opens; with the file missing, confirm a modal asks whether to create it and, after confirming, an empty file (0600) is created and opened. Click the settings button and confirm the Settings UI opens filtered by `claudeCode.` / `chatgpt.`. Replace the `CLAUDE.md` link of one account by a regular file, leave another account without the file, then click "Sync rules": confirm one notification summarizes "linked N", "M already linked" and lists the account that keeps its own `CLAUDE.md`; the missing link is created as a symlink to the default file and the regular file is untouched; with no other accounts the message says there is nothing to sync. Repeat on the Codex page (also while Codex switching is not enabled, where the "Tools" row is still shown). Run "Sync Global Rules to Other Accounts" from the Command Palette and confirm it first asks to pick Claude Code (CLAUDE.md) / Codex (AGENTS.md).
+13. **Footer toolbar and version card**: the footer toolbar stays pinned at the bottom while the page content scrolls above it, on both tabs. Click "Show CLI and extension versions" and confirm a card opens above the toolbar with four items (Claude Code CLI, Claude Code extension, Codex CLI, Codex extension), each with its label on one line and its value in monospace on the next; a missing CLI shows "Not found"; clicking the button again or the close button collapses it. "Reload Window" and "Restart Extension Host" act immediately without confirmation; "Restart WSL Server" shows the modal confirmation (cancel it; see the Codex warning below). Run "Show CLI and Extension Versions" from the Command Palette and confirm a read-only list is shown.
+14. **Widths**: at panel widths 200 / 240 / 280 / 340 / 420px, in both languages, confirm there is no horizontal scroll bar, long names / emails / directories / version values / banner text wrap, button groups never overlap text, the "Tools" row buttons wrap to a new line when needed, and the layout switches correctly at the 340px breakpoint.
+15. **Language**: set `aiSwitcher.language` to `en`, then `zh-cn`, then `auto`; confirm each time without reloading that the panel (tabs, titles, banners, buttons, tooltips, placeholders, add-section help text, footer toolbar titles, version card, disabled Codex page), the status bar tooltip, notifications, modal dialogs and QuickPick lists switch language immediately, and that an open inline rename or typed add-input text is not broken by the re-render. With `auto`, confirm the language follows VS Code's display language. Confirm that command titles, categories and the view name follow VS Code's display language only (not the setting). Confirm the rc marker block written by "Enable" is identical in both languages.
+
+### Codex
+
+**Warning: a Codex switch and "Restart WSL Server" really restart Antigravity's WSL server, which disconnects every WSL window, closes integrated terminals and ends the current Claude Code session.** The following steps are also performed by the user personally; agents must never perform any step that writes to the real home directory, deletes directories or restarts the server.
+
+1. **Tab page**: the container title and the view name are both "AI Account Switcher" (the sidebar title is shown only once); click the Codex tab at the top to switch to the Codex page; the title-bar refresh button works for both pages. While not enabled, the Codex page only shows the explanation and the "Enable Codex switching" button plus the "Tools" row; the add section is hidden.
+2. **Enable pre-checks**: temporarily add a line `export CODEX_HOME=/tmp/x` to `~/.bashrc` and click enable; confirm the error lists the conflict and nothing is written; restore and try again. If `~/.bash_profile` exists and does not source `~/.bashrc`, confirm enabling is refused.
+3. **Enable**: click "Enable Codex switching", confirm the modal shows the full marker block; after clicking "Write", the block in `~/.bashrc` is located before the `case $- in` guard and the block in `~/.profile` is at the end, and both files keep their permissions; the self-check passes and the Codex page switches to the account layout (the `default` row is current, every account row has a pencil icon); `bash -i -l -c 'echo $CODEX_HOME'` prints nothing (the state file is empty).
+4. **Add**: type `test1` and confirm `~/.codex-test1` (0700) is created, `config.toml` is copied (0600), `AGENTS.md` is a symlink to `~/.codex/AGENTS.md`, and `auth.json` is not copied; temporarily add a line `model_provider = "x"` to `~/.codex/config.toml`, add `test2`, and confirm a "not copied" message appears and `~/.codex-test2` has no `config.toml`; `~/.codex` is unchanged (except an empty `AGENTS.md` created if it was missing).
+5. **Switch**: click the switch button of `test1` and check the modal confirmation text; after confirming, the state file contains the absolute path of `~/.codex-test1` with mode 0600; then every WSL window shows "Cannot reconnect", and after clicking "Reload Window" in each one, `test1` is current on the Codex page and there is no "takes effect after restart" banner; in a new terminal `echo $CODEX_HOME` prints that directory; the official Codex panel shows signed out (new directory).
+6. **Takes-effect-after-restart banner**: change the state file by hand to another registered directory and confirm the top of the Codex page shows "X selected; takes effect after restarting the server" with a "Restart server" button; change it back and the banner disappears.
+7. **Terminal sign-in, email and plan**: click "Log in" on a signed-out row and confirm the terminal is named `Codex (test1)` and the command is `env CODEX_HOME='<absolute path>' codex login`; the terminal button of a signed-in row sends the command without `login`; the `default` row sends `env -u CODEX_HOME codex`. After a ChatGPT sign-in the row shows email and plan (e.g. `Plus`, `Pro`, `Team`); a directory signed in with an API key shows "API key" and no email; after changing `auth.json` by hand to invalid JSON the row shows "Logged in" without email and no error. Confirm that no raw token appears anywhere in the extension host log or the panel.
+8. **Remove**: the current (effective) account row has no remove button; the Command Palette remove list contains neither the effective account nor the selected account; remove `test2` choosing to delete the directory and confirm it is deleted; run `codex` in an account directory so that its daemon is alive, try to delete that directory and confirm it is refused with a message that the daemon is still running.
+9. **Switch back to default and disable**: switch back to `default`; after the restart `CODEX_HOME` is empty in a new terminal. Run "Disable Codex Account Switching" and confirm the marker blocks in both files (including the blank line added before the block in `~/.bashrc`) are removed exactly, the state file is deleted and the Codex page returns to the disabled page. Delete the end marker in `~/.bashrc` by hand and disable again; confirm an error is reported and the file is unchanged.
+10. **Manual method**: close all windows, wait 5 minutes and reopen; confirm the connection works and `CODEX_HOME` follows the state file.

@@ -1,0 +1,48 @@
+// Shared test helpers: create a temporary HOME, assert the real HOME is not used, clean up
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+// Record the real home directory at module load (before any `before` hook) for later assertions
+const REAL_HOME = os.homedir();
+const ENV_KEYS = ['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'SHELL'] as const;
+
+export interface TempHome { home: string; restore(): void }
+
+/**
+ * Creates a mktemp directory and points process.env.HOME at it; also clears CLAUDE_CONFIG_DIR / CODEX_HOME
+ * so that defaultDir / codexDefaultDir / effectiveDir all resolve inside the temporary directory.
+ * restore() deletes the directory and restores the environment variables.
+ */
+export function makeTempHome(prefix: string): TempHome {
+  const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+  for (const k of ENV_KEYS) saved[k] = process.env[k];
+  // The prefix avoids selfCheck's own ai-switcher-codex-*, otherwise parallel tests would disturb its leftover check
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `ai-switcher-test-${prefix}-`));
+  process.env.HOME = home;
+  delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CODEX_HOME;
+  assertTempHome(home);
+  return {
+    home,
+    restore() {
+      for (const k of ENV_KEYS) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    },
+  };
+}
+
+/** Asserts that the current os.homedir() is a temporary directory, not the real home directory */
+export function assertTempHome(expected?: string): void {
+  const home = os.homedir();
+  assert.notEqual(path.resolve(home), path.resolve(REAL_HOME), `HOME is still the real home directory: ${home}`);
+  assert.ok(path.resolve(home).startsWith(path.resolve(os.tmpdir())), `HOME is not under the temporary directory: ${home}`);
+  if (expected !== undefined) assert.equal(home, expected);
+}
+
+export const read = (f: string): string => fs.readFileSync(f, 'utf8');
+export const mode = (f: string): string => (fs.statSync(f).mode & 0o777).toString(8);

@@ -1,0 +1,356 @@
+import { after, before, describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { setLocale } from '../src/i18n';
+import {
+  RC_BEGIN, RC_END, STATE_FILE, effectiveDir, installRcBlocks, preCheck, rcBlock, rcStatus, readSelectedDir,
+  removeRcBlocks, selfCheck, writeSelectedDir,
+} from '../src/codex/codexState';
+import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
+
+let tmp: TempHome;
+let home: string;
+let bashrc: string;
+let profile: string;
+
+before(() => {
+  tmp = makeTempHome('codex-state');
+  home = tmp.home;
+  bashrc = path.join(home, '.bashrc');
+  profile = path.join(home, '.profile');
+  process.env.SHELL = '/bin/bash';
+});
+after(() => tmp.restore());
+
+const bashrcOrig = `# ~/.bashrc
+export FOO=1
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+alias ll='ls -l'
+`;
+const profileOrig = `# ~/.profile
+if [ -n "$BASH_VERSION" ]; then
+    if [ -f "$HOME/.bashrc" ]; then
+	. "$HOME/.bashrc"
+    fi
+fi
+`;
+
+describe('state file', () => {
+  test('missing → undefined', () => {
+    assertTempHome(home);
+    assert.equal(STATE_FILE(), path.join(home, '.config', 'ai-switcher', 'codex-home'));
+    assert.equal(readSelectedDir(), undefined);
+  });
+  test('atomic write: resolved path, 0600, directory 0700, no temp file left', () => {
+    writeSelectedDir(path.join(home, 'foo/../.codex-a'));
+    assert.equal(readSelectedDir(), path.join(home, '.codex-a'));
+    assert.equal(mode(STATE_FILE()), '600');
+    assert.equal(mode(path.dirname(STATE_FILE())), '700');
+    assert.deepEqual(fs.readdirSync(path.dirname(STATE_FILE())), ['codex-home']);
+  });
+  test('writing undefined → empty file → reads as undefined; blank content is also undefined', () => {
+    writeSelectedDir(undefined);
+    assert.equal(read(STATE_FILE()), '');
+    assert.equal(readSelectedDir(), undefined);
+    fs.writeFileSync(STATE_FILE(), '  \n');
+    assert.equal(readSelectedDir(), undefined);
+  });
+  test('effectiveDir uses the extension host CODEX_HOME, default directory when empty', () => {
+    delete process.env.CODEX_HOME;
+    assert.equal(effectiveDir(), path.join(home, '.codex'));
+    process.env.CODEX_HOME = home + '/x/../.codex-z';
+    assert.equal(effectiveDir(), path.join(home, '.codex-z'));
+    process.env.CODEX_HOME = '';
+    assert.equal(effectiveDir(), path.join(home, '.codex'));
+    delete process.env.CODEX_HOME;
+  });
+});
+
+describe('rcBlock', () => {
+  test('exact content', () => {
+    const expect = `# >>> ai-switcher codex >>>
+if [ -r "$HOME/.config/ai-switcher/codex-home" ]; then
+  _ai_switcher_codex_home="$(cat "$HOME/.config/ai-switcher/codex-home" 2>/dev/null)"
+  if [ -n "$_ai_switcher_codex_home" ] && [ -d "$_ai_switcher_codex_home" ]; then
+    export CODEX_HOME="$_ai_switcher_codex_home"
+  else
+    unset CODEX_HOME
+  fi
+  unset _ai_switcher_codex_home
+fi
+# <<< ai-switcher codex <<<
+`;
+    assert.equal(rcBlock(), expect);
+  });
+});
+
+describe('installRcBlocks / removeRcBlocks / rcStatus', () => {
+  before(() => {
+    fs.writeFileSync(bashrc, bashrcOrig, { mode: 0o600 });
+    fs.writeFileSync(profile, profileOrig, { mode: 0o644 });
+  });
+  test('rcStatus is all false before install', () => {
+    assert.deepEqual(rcStatus(), [
+      { file: profile, hasBlock: false, broken: false, hasUserExport: false },
+      { file: bashrc, hasBlock: false, broken: false, hasUserExport: false },
+    ]);
+  });
+  test('bashrc block before the guard, profile block appended at the end, modes preserved', () => {
+    installRcBlocks();
+    const b = read(bashrc);
+    assert.ok(b.indexOf(RC_BEGIN) >= 0 && b.indexOf(RC_END) > b.indexOf(RC_BEGIN) && b.indexOf('case $- in') > b.indexOf(RC_END));
+    assert.equal(b, '# ~/.bashrc\nexport FOO=1\n\n' + rcBlock() + 'case $- in\n    *i*) ;;\n      *) return;;\nesac\nalias ll=\'ls -l\'\n');
+    assert.equal(mode(bashrc), '600');
+    assert.equal(read(profile), profileOrig + '\n' + rcBlock());
+    assert.equal(mode(profile), '644');
+    assert.deepEqual(rcStatus().map((s) => s.hasBlock), [true, true]);
+  });
+  test('idempotent', () => {
+    const b = read(bashrc);
+    const p = read(profile);
+    installRcBlocks();
+    assert.equal(read(bashrc), b);
+    assert.equal(read(profile), p);
+    assert.equal(b.split(RC_BEGIN).length, 2);
+  });
+  test('removal restores exactly; no-op without a block', () => {
+    removeRcBlocks();
+    assert.equal(read(bashrc), bashrcOrig);
+    assert.equal(read(profile), profileOrig);
+    assert.equal(mode(bashrc), '600');
+    removeRcBlocks();
+    assert.equal(read(bashrc), bashrcOrig);
+  });
+  test('blank line before guard / guard on line 1 / guard on line 2: install then remove restores exactly', () => {
+    for (const orig of [
+      'a=1\n\ncase $- in\n  *i*) ;;\n  *) return;;\nesac\n',
+      'case $- in\n  *i*) ;;\n  *) return;;\nesac\nb=2\n',
+      '\ncase $- in\n  *i*) ;;\n  *) return;;\nesac\n',
+    ]) {
+      fs.writeFileSync(bashrc, orig);
+      installRcBlocks();
+      const b = read(bashrc);
+      assert.ok(b.includes(RC_END + '\ncase $- in'), 'the guard follows the block on its own line');
+      removeRcBlocks();
+      assert.equal(read(bashrc), orig);
+    }
+  });
+  test('appends without a guard; adds two newlines when the trailing one is missing; creates a missing file with 0644', () => {
+    fs.writeFileSync(bashrc, 'export A=1');
+    fs.rmSync(profile);
+    installRcBlocks();
+    assert.equal(read(bashrc), 'export A=1\n\n' + rcBlock());
+    assert.equal(read(profile), rcBlock());
+    assert.equal(mode(profile), '644');
+    removeRcBlocks();
+    assert.equal(read(bashrc), 'export A=1\n');
+    assert.equal(read(profile), '');
+  });
+  test('rcStatus: counts the user\'s own export, not the one inside the block', () => {
+    fs.writeFileSync(bashrc, '  export CODEX_HOME=/x\n');
+    fs.writeFileSync(profile, rcBlock());
+    const s = rcStatus();
+    assert.equal(s[1].hasUserExport, true);
+    assert.equal(s[0].hasUserExport, false);
+    assert.equal(s[0].hasBlock, true);
+    fs.rmSync(profile);
+    assert.deepEqual(rcStatus()[0], { file: profile, hasBlock: false, broken: false, hasUserExport: false });
+  });
+  test('missing END: removeRcBlocks throws and leaves the file unchanged, the other file is still processed; both broken → messages combined', () => {
+    const brokenText = 'a=1\n' + RC_BEGIN + '\nexport CODEX_HOME=/x\nb=2\n';
+    fs.writeFileSync(bashrc, brokenText, { mode: 0o600 });
+    fs.writeFileSync(profile, 'p=1\n\n' + rcBlock());
+    assert.throws(() => removeRcBlocks(), { message: `Marker block is incomplete (missing end marker); please check ${bashrc} manually` });
+    assert.equal(read(bashrc), brokenText);
+    assert.equal(read(profile), 'p=1\n');
+    assert.deepEqual(fs.readdirSync(home).filter((f) => f.endsWith('.tmp')), []);
+    fs.writeFileSync(profile, RC_BEGIN + '\n');
+    assert.throws(() => removeRcBlocks(), (e: unknown) => e instanceof Error && e.message.includes(bashrc) && e.message.includes(profile));
+  });
+  test('removes every marker block', () => {
+    fs.writeFileSync(bashrc, 'a=1\n\n' + rcBlock() + 'mid\n\n' + rcBlock() + rcBlock() + 'z=9\n');
+    fs.writeFileSync(profile, rcBlock() + rcBlock());
+    removeRcBlocks();
+    assert.equal(read(bashrc), 'a=1\nmid\nz=9\n');
+    assert.equal(read(profile), '');
+  });
+  test('atomic write: no temp file left, mode preserved, symlink writes go to the real target', () => {
+    fs.writeFileSync(bashrc, 'x=1\n');
+    fs.chmodSync(bashrc, 0o640);
+    fs.rmSync(profile);
+    const realProfile = path.join(home, 'dotfiles', 'profile');
+    fs.mkdirSync(path.dirname(realProfile), { recursive: true });
+    fs.writeFileSync(realProfile, 'p=1\n', { mode: 0o600 });
+    fs.symlinkSync(realProfile, profile);
+    const inoBefore = fs.statSync(realProfile).ino;
+    installRcBlocks();
+    assert.equal(mode(bashrc), '640');
+    assert.ok(fs.lstatSync(profile).isSymbolicLink());
+    assert.equal(read(realProfile), 'p=1\n\n' + rcBlock());
+    assert.equal(mode(realProfile), '600');
+    assert.notEqual(fs.statSync(realProfile).ino, inoBefore, 'rename replaced the target inode');
+    const leftovers = [...fs.readdirSync(home), ...fs.readdirSync(path.dirname(realProfile))].filter((f) => f.endsWith('.tmp'));
+    assert.deepEqual(leftovers, []);
+    removeRcBlocks();
+    assert.ok(fs.lstatSync(profile).isSymbolicLink());
+    assert.equal(read(realProfile), 'p=1\n');
+    assert.equal(mode(realProfile), '600');
+    assert.equal(read(bashrc), 'x=1\n');
+    fs.unlinkSync(profile);
+    fs.rmSync(path.dirname(realProfile), { recursive: true });
+    fs.writeFileSync(profile, 'y\n');
+    fs.chmodSync(bashrc, 0o644);
+  });
+  test('EACCES without read permission is thrown, not swallowed', { skip: process.getuid?.() === 0 ? 'root is not restricted by permissions' : false }, () => {
+    fs.writeFileSync(bashrc, 'x\n');
+    fs.chmodSync(bashrc, 0o000);
+    try {
+      assert.throws(() => rcStatus(), { code: 'EACCES' });
+      assert.throws(() => preCheck(), { code: 'EACCES' });
+      assert.throws(() => installRcBlocks(), { code: 'EACCES' });
+      assert.throws(() => removeRcBlocks(), { code: 'EACCES' });
+    } finally {
+      fs.chmodSync(bashrc, 0o644);
+    }
+  });
+});
+
+describe('preCheck', () => {
+  before(() => {
+    fs.writeFileSync(bashrc, 'x\n');
+    fs.writeFileSync(profile, 'y\n');
+  });
+  test('bash + no conflicts → ok', () => {
+    process.env.SHELL = '/bin/bash';
+    assert.deepEqual(preCheck(), { ok: true, reasons: [] });
+  });
+  test('SHELL not bash / unset → refused', () => {
+    process.env.SHELL = '/usr/bin/zsh';
+    let r = preCheck();
+    assert.equal(r.ok, false);
+    assert.equal(r.reasons.length, 1);
+    assert.match(r.reasons[0], /zsh/);
+    delete process.env.SHELL;
+    r = preCheck();
+    assert.equal(r.ok, false);
+    assert.equal(r.reasons[0], 'Login shell is not bash (current SHELL=unset); only bash is supported');
+    process.env.SHELL = '/bin/bash';
+  });
+  test('.bash_profile / .bash_login not sourcing .bashrc → refused', () => {
+    fs.writeFileSync(path.join(home, '.bash_profile'), 'echo hi\n');
+    let r = preCheck();
+    assert.equal(r.ok, false);
+    assert.match(r.reasons[0], /bash_profile/);
+    fs.writeFileSync(path.join(home, '.bash_profile'), '. ~/.bashrc\n');
+    assert.equal(preCheck().ok, true);
+    fs.writeFileSync(path.join(home, '.bash_login'), 'nothing\n');
+    r = preCheck();
+    assert.equal(r.ok, false);
+    assert.match(r.reasons[0], /bash_login/);
+    fs.rmSync(path.join(home, '.bash_login'));
+    fs.rmSync(path.join(home, '.bash_profile'));
+  });
+  test('user export in both files → two reasons', () => {
+    fs.writeFileSync(profile, 'export CODEX_HOME=/a\n');
+    fs.writeFileSync(bashrc, 'export CODEX_HOME=/b\n');
+    const r = preCheck();
+    assert.equal(r.ok, false);
+    assert.equal(r.reasons.length, 2);
+  });
+  test('broken: BEGIN without END, the export after it counts as outside the block', () => {
+    fs.writeFileSync(bashrc, 'a=1\n' + RC_BEGIN + '\nexport CODEX_HOME=/x\n');
+    fs.writeFileSync(profile, rcBlock() + RC_BEGIN + '\n');
+    const s = rcStatus();
+    assert.deepEqual(s[1], { file: bashrc, hasBlock: true, broken: true, hasUserExport: true });
+    assert.deepEqual(s[0], { file: profile, hasBlock: true, broken: true, hasUserExport: false });
+    const r = preCheck();
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.reasons, [
+      `Marker block is incomplete; please fix ${profile} manually`,
+      `Marker block is incomplete; please fix ${bashrc} manually`,
+      `${bashrc} already has your own export CODEX_HOME, which conflicts`,
+    ]);
+    fs.writeFileSync(bashrc, rcBlock());
+    fs.writeFileSync(profile, 'x\n');
+    assert.deepEqual(rcStatus()[1], { file: bashrc, hasBlock: true, broken: false, hasUserExport: false });
+    assert.equal(preCheck().ok, true);
+  });
+});
+
+describe('selfCheck (real bash -i -l, clean environment)', () => {
+  // selfCheck's internal spawnSync takes no env argument and only inherits process.env; during the call, process.env
+  // is replaced with a minimal env -i style environment (HOME is the temp dir) so outer variables such as CODEX_HOME do not leak into the login shell
+  const inCleanEnv = <T,>(fn: () => T): T => {
+    const saved = process.env;
+    process.env = { HOME: home, PATH: saved.PATH, SHELL: '/bin/bash', TERM: 'dumb', LANG: 'C.UTF-8' } as NodeJS.ProcessEnv;
+    try {
+      return fn();
+    } finally {
+      process.env = saved;
+    }
+  };
+  const tmpDirs = (): string[] => fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('ai-switcher-codex-'));
+  before(() => {
+    fs.writeFileSync(bashrc, bashrcOrig, { mode: 0o600 });
+    fs.writeFileSync(profile, profileOrig, { mode: 0o644 });
+    installRcBlocks();
+  });
+  test('passes, restores the state file (trimmed + resolved, 0600) and cleans up its temp directory', () => {
+    fs.writeFileSync(STATE_FILE(), '  ' + home + '/.codex-orig\n', { mode: 0o644 });
+    const before = tmpDirs();
+    const r = inCleanEnv(selfCheck);
+    assert.ok(r.ok, 'selfCheck failed: ' + r.detail);
+    assert.match(r.detail, /^CODEX_HOME=/);
+    assert.equal(read(STATE_FILE()), home + '/.codex-orig');
+    assert.equal(mode(STATE_FILE()), '600');
+    assert.deepEqual(fs.readdirSync(path.dirname(STATE_FILE())), ['codex-home']);
+    assert.deepEqual(tmpDirs(), before);
+  });
+  test('state file originally missing → still missing after the self-check', () => {
+    fs.rmSync(STATE_FILE());
+    const r = inCleanEnv(selfCheck);
+    assert.ok(r.ok, r.detail);
+    assert.equal(fs.existsSync(STATE_FILE()), false);
+  });
+  test('state file originally blank → restored as empty', () => {
+    fs.writeFileSync(STATE_FILE(), '  \n');
+    const r = inCleanEnv(selfCheck);
+    assert.ok(r.ok, r.detail);
+    assert.equal(read(STATE_FILE()), '');
+    assert.equal(readSelectedDir(), undefined);
+  });
+  test('fails when the marker block is missing, with bash noise filtered', () => {
+    removeRcBlocks();
+    const r = inCleanEnv(selfCheck);
+    assert.equal(r.ok, false);
+    assert.match(r.detail, /CODEX_HOME in the login shell is ""/);
+    assert.ok(!r.detail.includes('cannot set terminal process group'));
+    assert.ok(!r.detail.includes('no job control in this shell'));
+  });
+});
+
+describe('codexState in zh-cn', () => {
+  before(() => {
+    fs.writeFileSync(bashrc, 'a=1\n' + RC_BEGIN + '\n');
+    fs.writeFileSync(profile, 'y\n');
+    process.env.SHELL = '/usr/bin/zsh';
+  });
+  after(() => {
+    setLocale('en');
+    process.env.SHELL = '/bin/bash';
+    fs.writeFileSync(bashrc, 'x\n');
+  });
+  test('preCheck and removeRcBlocks messages follow the locale', () => {
+    setLocale('zh-cn');
+    assert.deepEqual(preCheck().reasons, [
+      '登录 shell 不是 bash（当前 SHELL=/usr/bin/zsh），仅支持 bash',
+      `标记块不完整，请手工修复 ${bashrc}`,
+    ]);
+    assert.throws(() => removeRcBlocks(), { message: `标记块不完整（缺少结束标记），请手工检查 ${bashrc}` });
+  });
+});

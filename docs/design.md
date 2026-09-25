@@ -1,0 +1,314 @@
+# Claude Code Account Switcher Extension (WSL only): Design
+
+Date: 2026-09-26
+Status: implemented (v7, 2026-09-26: English docs + i18n: English / Simplified Chinese UI selected by the `aiSwitcher.language` setting, see 5.5; v6, 2026-09-26: footer toolbar and version card, per-page "Tools" row, global rules `CLAUDE.md` shared via symlinks, every registered account can be renamed, simplified account row UI; v5: single view with tabs + account display names + email and plan display; v4: sidebar changed from a native TreeView to a Webview panel. Contract in interfaces.md)
+
+## 1. Goals and scope
+
+- Goal: in VS Code (WSL remote window), switch between two or more Claude Code accounts from a sidebar panel; after a switch, new sessions of the official Claude Code extension use the selected account.
+- Runtime environment: WSL / Linux only. Native Windows and macOS are not supported.
+- User environment: only claude.ai subscription sign-in (OAuth), no API key; WSL is opened from VS Code, using the claude CLI and the official Claude Code extension.
+- Non-goals:
+  - Never read or write `.credentials.json`; never copy or cache any token.
+  - Never modify the contents of `~/.claude`, with one exception: when `CLAUDE.md` is missing, an empty file is created as the target of the other account directories' symlinks.
+  - No usage display, no automatic rotation when limits are hit.
+  - No shared session history (each account directory is independent).
+  - Do not use `claudeCode.claudeProcessWrapper`.
+
+## 2. Background facts (verified)
+
+The following facts come from the official documentation and the source code of the locally installed official extension `anthropic.claude-code-2.1.282-linux-x64`; this design rests on them.
+
+1. `CLAUDE_CONFIG_DIR` is documented, supported behavior: when it is set, `.credentials.json`, `.claude.json`, `settings.json`, `projects/` and `sessions/` all live in that directory. Each directory is an independently signed-in account. User-level MCP servers are stored in `mcpServers` of `.claude.json`, not in `settings.json`.
+2. The official extension setting `claudeCode.environmentVariables`:
+   - scope `machine`, schema is an array of `{ "name": string, "value": string }`; the parser in the source also accepts the object form `{ KEY: value }` and converts non-string values to strings.
+   - The extension reads this setting fresh every time it starts a claude process to build the environment (the extension host's `process.env` as the base, with the setting entries layered on top), so a change takes effect for new sessions immediately.
+   - An entry whose `name` is `CLAUDE_CONFIG_DIR` and whose `value` is an empty string is skipped.
+   - The official extension never writes this setting itself, so there is no write race with this extension.
+3. The official extension has a built-in watcher for `CLAUDE_CONFIG_DIR` changes: after a change and a settling period of about 1 second it calls `refreshEveryHost`, refreshing the account display and usage of every panel. Note: at that point every panel header (including panels still running a process of the old account) shows the new account, which does not match the account actually used by that panel's process until a reload.
+4. Open sessions hold their old process and do not follow a switch; only new sessions use the new account. Transcripts of old sessions live in `projects/` of the old account directory and cannot be found in the new directory after a reload, so the effect of a reload is "all panels start over with the new account", not "old sessions move to the new account". Old sessions can be resumed after switching back.
+5. Reasons for not using `claudeCode.claudeProcessWrapper`: the linux-x64 extension ships its own binary, so no wrapper is needed; the official documentation states that in wrapper mode new sessions default to Manual permission mode and do not restore plan mode; in the source `sessionConfigHome` takes a different branch in wrapper mode. The wrapper calling convention is undocumented (Issue #10491 is closed).
+6. Under WSL2 the browser sign-in callback often fails; the official documentation says the "paste code" flow is used then, which is normal. After switching to a signed-out directory, the official panel shows its sign-in screen automatically.
+7. Claude Code on the WSL side and on the Windows side are two independent installations with separate credentials; this extension only runs on the WSL side and never reads across into `/mnt/c`.
+8. The directory the official extension uses for its `ide/` lock files only follows the extension host process's `process.env.CLAUDE_CONFIG_DIR`, not the value in `claudeCode.environmentVariables` (source: `ey$()` calls `uX()`). Consequence: when `claude` is run in a terminal for a non-default account, the CLI looks for lock files in `~/.claude-<name>/ide/` while they are in `~/.claude/ide/`, so the `/ide` integration of the terminal CLI is expected not to work. The native panel passes the MCP configuration directly at startup and does not use lock-file discovery, so it is not affected.
+9. When a machine-scope setting is written with `ConfigurationTarget.Global` in a WSL remote window, VS Code stores it in the remote Machine settings (`toEditableConfigurationTarget` in `configurationService.ts`) and also reads the remote value. Preconditions: the official extension is installed on the WSL side (otherwise the key is not registered and `update` throws); `update` also throws when the remote settings.json has a syntax error.
+
+## 3. Overall design
+
+```
+User clicks the "Switch" button in the sidebar panel (or double-clicks an account row)
+  → the extension rewrites CLAUDE_CONFIG_DIR in claudeCode.environmentVariables
+  → the official extension refreshes its panels 1 second later; new sessions use the new directory
+  → a reload banner appears at the top of the sidebar panel (a notification when the panel is not visible); the user may reload the window (all panels start over with the new account)
+```
+
+An account is a directory:
+
+| Account | Directory | Origin |
+|---|---|---|
+| default | `~/.claude` (if the extension host environment already has `CLAUDE_CONFIG_DIR`, that value wins) | Always exists, cannot be removed |
+| `<name>` | `~/.claude-<name>` | Added by the user in the input at the bottom of the panel, or registered automatically by scanning `~/.claude-*` on activation/refresh |
+
+## 4. Data model
+
+- The account list is stored in the extension's `globalState` under the key `accounts`, value `Array<{ name: string; dir: string }>`. The default account is not stored; it is prepended at runtime.
+- On activation and on refresh, `~/.claude-*` directories are scanned (basename matches `^\.claude-[A-Za-z0-9_-]+$`, a real directory and not a symlink, and not pointing to the default directory after resolving symlinks); those not in the list are added automatically, so the list is not empty if globalState is lost.
+- The `globalState` key `ignoredDirs` records directories of accounts that were removed while keeping their directory; automatic scanning skips them; adding an account with the same name again removes it from the ignore list.
+- The single source of truth for the current account is the `CLAUDE_CONFIG_DIR` entry in `claudeCode.environmentVariables`:
+  - Reading accepts both the array and the object form; non-string values are converted to strings; an empty `value` counts as no entry.
+  - Entry present with a non-empty value → the current directory is that value (compared after `path.resolve`).
+  - No entry → the current account is the default account.
+  - The value is not in the account list (set by hand) → the panel shows it as an "External directory" row that can be switched away from.
+- Account display information comes from `oauthAccount` in the account info file (read-only, never copied): email `emailAddress`; the plan is formatted by `formatClaudePlan` from `organizationType` and `organizationRateLimitTier` (`claude_max` → `Max`, `claude_pro` → `Pro`, `claude_team`/`team` → `Team`, `claude_enterprise`/`enterprise` → `Enterprise`, other values lose the `claude_` prefix and are capitalized; a trailing `_<n>x` of the tier becomes `<n>x`; combined as e.g. `Max 20x`; no plan when both are empty). File location: usually `<dir>/.claude.json`; for the default account without `CLAUDE_CONFIG_DIR` it is `~/.claude.json` (in the home directory, not inside `~/.claude`), consistent with the official source `join(CLAUDE_CONFIG_DIR || homedir(), ".claude.json")`. Reading tolerates half-written JSON (the CLI is writing); parse failures count as "unknown".
+- Signed-in state: the presence of `oauthAccount.emailAddress` is the primary criterion, the existence of `.credentials.json` a secondary one (consistent with how the official extension detects sign-out / account changes).
+- **Account display names (aliases)**: `globalState` key `claude.labels`, value `Record<string /*name*/, string /*label*/>`, keyed by account name; no entry means not set (the name is shown). The legacy single-value key `claude.defaultLabel` is migrated to `{ default: <old value> }` on first read and the old key is deleted. Stored and validated by the `LabelStore` in `labels.ts`: non-empty after trim, ≤ 32 characters, no line breaks, not equal to the external-directory sentinel or either localized external-directory name ("External directory" / "外部目录"), not equal to the name or label of another account of the same vendor (excluding the account itself; entering the account's own name clears the alias); the same alias is allowed across Claude and Codex. Every registered account (including default) can have an alias; the external-directory row cannot. Aliases are display-only (panel, status bar, QuickPick, messages, terminal names); the directory and internal name do not change, and logic still uses name / dir. When adding an account, the name must not equal the name or label of any account of the same vendor; removing an account also clears its alias.
+- A panel row (`AccountView`) carries both the internal name `name` and the display name `label`, plus `email` and `plan` (the formatted plan text).
+- The active sidebar tab is stored in the memento key `panel.activeTab` (`'claude' | 'codex'`, default `claude`), written by the frontend's `setTab` message.
+- The UI language is not stored by the extension: it is the VS Code setting `aiSwitcher.language` (see 5.5); the resolved locale is kept in memory and pushed to the Webview as `PanelState.locale`.
+
+## 5. User interface
+
+### 5.1 Sidebar (Webview panel)
+
+The sidebar was changed from a native TreeView to a `WebviewView` (the view is declared with `"type": "webview"` in `package.json`); the frontend uses the Web Components of @vscode-elements/elements (`vscode-button`, `vscode-textfield`, `vscode-toolbar-button`, `vscode-icon`) and the @vscode/codicons icon font.
+
+- A new Activity Bar icon (`resources/account.svg`), container id `aiSwitcher`, title "AI Account Switcher" ("AI 账号切换器" in Chinese), containing the **only** view, id `aiSwitcher.accounts`, also named "AI Account Switcher". Both names come from `package.nls*.json` (see 5.5). `AccountsPanel` is instantiated once and holds both the Claude and the Codex `PanelSource`.
+- **Tab bar**: two tab buttons at the top of the panel, Claude / Codex (segmented control style), the selected one highlighted; a click makes the frontend switch rendering and send `setTab`; the host records it in the memento `panel.activeTab` and returns it as `PanelState.active` in later state pushes; the frontend also remembers the current tab in its Webview state and only adopts the host's `active` when it has no local record. The `focusAdd` message first switches to the given tab and then focuses that page's input. Codex page differences are in codex-design.md section 7.
+- The view title bar has only one button: `$(refresh)` refresh (refreshes both pages). Adding accounts happens inside the panel; the title bar no longer has an add button.
+- All colors come from the `--vscode-*` theme variables injected by the editor (or `color-mix` of them), so light and dark themes adapt automatically; plan colors (see below) have a separate set of values for light / high-contrast light themes.
+- The frontend builds nodes with the DOM API; all text is written through `textContent`, never by concatenating HTML.
+- Outside the tab pages: a toolbar shared by both pages is pinned to the very bottom of the panel, and the content area scrolls above it; the version card, when expanded, sits directly above the toolbar (see 6.6).
+- All texts below are shown in the current UI language (see 5.5); they are quoted here in English.
+
+The Claude page has four blocks from top to bottom (banner, account list, "Tools" row, add-account section):
+
+1. **Reload banner** (only shown when an account was switched in this window and the window has not been reloaded yet)
+   - Info icon + title "Switched to X" + explanation "New sessions use the new account; open sessions still use the old one. After reloading, all panels start over with the new account."
+   - Button "Reload Window": runs `workbench.action.reloadWindow`.
+   - Close button at the top right: only hides the banner, no reload.
+   - The banner state (the display name switched to, `switchedTo`) is kept in memory on the extension side and disappears naturally after a reload; another switch updates it to the new account name.
+2. **All accounts list**
+   - Title "All accounts" ("全部账号"), next to it an account count badge (a plain `span` using the badge theme colors).
+   - The current account is always pinned to the first position of the list (no separate card, no top card), with an emphasized style: plan-colored gradient background and outline, a 3px accent bar on the left and a drop shadow, a slightly larger bold name, and an extra line with the directory (monospace, home directory shown as `~`). At the right end of the name line is a 16px raised round check-mark badge (accent color gradient light-to-dark, top highlight, drop shadow, a ring of background color separating it from the card, title "Current account"); the text tag "Current" is no longer shown.
+   - Every row: a uniform 20px avatar, display name, email line (email when available; a "Logged in" text with a green dot when signed in without email; no line when signed out without email), tag group (plan tag + "Not logged in" tag); the default row has a 12px `home` badge overlaid at the bottom right of its avatar (title "Default account"), so it can be recognized after renaming; rows, names, emails, directories and plan tags have no hover tooltip, only buttons and badges do.
+   - Adaptive layout (container query, breakpoint 340px): narrow panel, three lines: avatar + name / email / tag group + button group; wide panel, two lines: avatar + name + tag group + button group / email, with the button group vertically centered on the right. Names, emails, directories and banner text that do not fit break anywhere (`overflow-wrap: anywhere`), and the avatar sticks to the top when the name spans several lines; plan tags are single-line with ellipsis. No horizontal scrolling.
+   - Plan colors: the frontend maps the plan text to `data-plan` (`tier0` Free/Go neutral gray; `tier1` Claude Pro / ChatGPT Plus blue; `tier2` Claude Max (not 20x) / ChatGPT Pro Lite champagne gold, solid background + dark text; `tier3` Claude Max 20x / ChatGPT Pro amber-to-bright-gold gradient + top highlight + dark gold text; `team` Team/Business teal; `enterprise` slate; `apikey` orange; `none` no plan), and CSS sets `--plan-color` accordingly: the row outline follows the plan color (normal outline when there is no plan), and the plan tag is a 4px rounded pill (light background + plan-colored outline and text), distinct from the capsule-shaped "Not logged in" tag.
+   - Rows that are signed out (no email and no `.credentials.json`) and not current show an extra hint line `Click "Log in" to log in from a terminal, or switch and log in from the Claude panel`.
+   - Avatar: the first letter of the display name, uppercased (`?` for the external-directory row); the background is a theme chart color picked stably by hashing the account name (`--vscode-charts-` blue/green/purple/orange/yellow/red).
+   - Row buttons are always visible (semi-transparent normally, fully opaque on hover or when the row has focus; the "Log in" button of signed-out rows is always opaque):
+     - `arrow-swap` switch to this account: non-current rows only;
+     - signed-in rows: `terminal` icon "Run claude with this account in a terminal"; signed-out rows: a text button "Log in" (also runs claude in a terminal), always fully opaque; both also apply to the external-directory row;
+     - `trash` remove account: only rows that are not default, not external and not current. The current account cannot be removed; switch to another account first.
+     - pencil icon "Rename": every row that is not the external directory (`kind !== 'external'`, including the default row).
+   - Double-clicking a non-current row, or focusing a non-current row with Tab and pressing Enter, also switches. A single click on the row does nothing, to avoid accidental switches; the current row is not focusable.
+   - Inline remove confirmation: after clicking remove, the row becomes a confirmation area: "Remove X from the list?", the hint "You will be asked separately whether to delete the account directory.", buttons "Remove" / "Cancel". The confirmation state ends automatically when the account disappears from the list.
+   - Inline rename: after clicking the pencil the name becomes an input (prefilled with the current display name, fully selected); the edit state is keyed by the row's `dir`; in edit state the button group and the check-mark badge are hidden; Enter submits `rename` (with `dir` and `label`), Esc or blur cancels (blur does not cancel while waiting for the host's result); when a `renameResult` with a matching `dir` arrives, an `error` is shown in red inline (if the edit state was lost, it is re-entered with the submitted value), and without `error` the edit state ends. Edit state styling: accent-colored row outline; the name line is wrapped in an opaque editor-background layer; the input uses the theme input background + accent outline and bold text, with a 1px outline + 3px glow when focused, switching to the error color when validation fails. Flow in 6.5.
+3. **"Tools" row** (between the account list and the add-account section)
+   - Title "Tools", three labeled secondary buttons (each at least 96px, wrapping when they do not fit): `CLAUDE.md` (ruler icon `symbol-ruler`, opens the global CLAUDE.md), Settings (`settings-gear`), Sync rules (`link`). The Codex page has `AGENTS.md` and the Codex extension settings instead. Behavior in 6.6.
+4. **Add-account section** (always present at the bottom of each page)
+   - A divider above it, title "Add account", one line with an input (placeholder "Account name, e.g. work") and an "Add" button (with the `add` icon) joined as a group, and one help line below.
+   - Live validation (immediate hints while typing, see 6.2): when invalid, the input turns red and the help line shows the reason (error color); the "Add" button is disabled when the input is empty, invalid or being submitted. Disabled styling: accent color mixed 40% with the input background + accent outline, text and plus sign still readable (dark accent text in light themes), instead of the component's default overall transparency; enabled state is solid accent, brighter on hover, with a glow ring on focus.
+   - The help line shows "Each account uses its own config directory ~/.claude-<name>" by default; with a valid name it shows "Will create directory ~/.claude-<name> and copy the default account's settings".
+   - Enter or "Add" submits; when creation fails on the extension side, the reason is shown in the help line; on success the input is cleared.
+   - This section is created only once and is not rebuilt when the list re-renders, so typed text and focus are preserved.
+
+### 5.2 Frontend/backend split and message protocol
+
+- The frontend (`src/webview/main.ts`) only renders and exchanges messages; business logic and validation are authoritative on the extension side (`accountsPanel.ts`, `commands.ts`, `codex/codexCommands.ts`, `labels.ts`), and frontend validation is only an immediate hint.
+- Message types are defined in `src/protocol.ts`, shared by both sides; that file imports no runtime module:
+  - Extension → frontend (`ToWebview`): `state` (the full `PanelState`: `active` current tab + `locale` UI language + the `TabState` of each page `claude`/`codex`, with account rows, `enabled`, `switchedTo`, `pendingDir`), `addResult` (add result, with `error` on failure), `renameResult` (rename result, with the renamed row's `dir`, `error` on failure), `focusAdd` (switch to the tab and focus its add input), `versions` (list `items` of CLI and extension versions, shown by the frontend as the version card). `addResult`, `renameResult` and `focusAdd` carry `mode`.
+  - Frontend → extension (`FromWebview`): `ready`, `setTab` (the host remembers the current tab), `switch`, `terminal`, `remove`, `rename` (all identify the account by its directory `dir`; `rename` also carries the new display name `label`), `add` (account name), `reload`, `dismissBanner`, `enable`, `restartServer`, `tool` (with a `ToolId`: `openGlobalMd` / `openSettings` / `reloadWindow` / `restartExtHost` / `restartServer` / `cliVersions` / `syncRules`). Everything except `ready` carries `mode`, and the host dispatches by `mode` to the Claude or Codex handler (`setTab` only writes the memento); for the footer toolbar, the `tool` message's `mode` is the current tab.
+- After loading, the frontend sends `ready` and the extension immediately pushes `state`; it also pushes once whenever the panel becomes visible again. A change of any watched file of either page pushes the full `PanelState`, and so does a change of `aiSwitcher.language`.
+- When the extension receives `switch`/`terminal`/`remove`/`rename`, it first looks the directory up with `panel.resolve(mode, dir)` among the rows currently shown on that page and only accepts directories present in the list; `remove` only acts on rows with `kind === "named"`, `rename` only on rows with `kind !== "external"`.
+
+### 5.3 Content security policy
+
+The Webview HTML carries a `Content-Security-Policy` meta tag:
+
+| Directive | Value | Notes |
+|---|---|---|
+| `default-src` | `'none'` | Everything else is blocked |
+| `script-src` | `'nonce-<random>'` | Only scripts with the nonce (i.e. `panel.js`); the nonce is generated with `crypto.randomBytes(16)` each time the HTML is generated |
+| `style-src` | webview source + `'unsafe-inline'` | Allows `codicon.css` and `panel-style.css`; `'unsafe-inline'` is needed because Lit components fall back to inline `<style>` when `adoptedStyleSheets` is not supported |
+| `font-src` | webview source only | Only allows loading `codicon.ttf` from the extension's own `dist/media` |
+
+- `webview.options`: `enableScripts: true`, `localResourceRoots` only contains `dist/media` in the extension directory.
+- The `<link>` for `codicon.css` must have `id="vscode-codicon-stylesheet"`: `vscode-icon` and other components rely on it to load the icon font inside the shadow DOM.
+
+### 5.4 Status bar
+
+- On the left it shows `$(account) Claude: <label>` (the alias for accounts that have one; the localized "External directory" when the current account is an external directory); the first tooltip line is the email ("Not logged in" when there is none), followed by ` · <plan>` when there is a plan; the second line is the directory.
+- A click opens the sidebar view container (command `workbench.view.extension.aiSwitcher`).
+
+### 5.5 Localization (i18n)
+
+- Languages: English (`en`) and Simplified Chinese (`zh-cn`).
+- Setting `aiSwitcher.language` (`contributes.configuration`, type string, enum `["auto", "en", "zh-cn"]`, default `"auto"`, scope `application`; enumDescriptions: auto = follow the VS Code display language, en = English, zh-cn = 简体中文).
+- Resolution: `auto` → `zh-cn` when `vscode.env.language` starts with `zh`, otherwise `en`; `en` / `zh-cn` are used as is.
+- Runtime strings follow the setting immediately, without a reload: on a change, the host calls `setLocale`, re-pushes the full `PanelState` (the Webview re-renders everything, including the add-section help text and the footer toolbar titles) and updates the status bar; subsequent notifications, modal dialogs, QuickPick lists and error reasons use the new language.
+- Static strings (`displayName`, `description`, command titles and categories, view container and view names, configuration titles and descriptions) use `%key%` placeholders in `package.json`, resolved from `package.nls.json` (English) and `package.nls.zh-cn.json` (Chinese). VS Code resolves these by **its own display language**, not by `aiSwitcher.language`; this is a platform limitation. English names: display name "PlanSwap: Claude Code & Codex Account Switcher"; container and view title "AI Account Switcher"; command categories "Claude Account", "Codex Account", "AI Account Switcher". The Chinese file keeps the Chinese titles ("AI 账号切换器", "Claude 账号", "Codex 账号", ...).
+- Host side: `src/i18n.ts` (no `vscode` import, so pure modules such as `paths.ts`, `labels.ts`, `codex/codexState.ts` can use it) holds the `en` and `zh-cn` tables and `t(key, params)` with `{name}` placeholders; `src/i18nVscode.ts` resolves the locale from the setting and watches it. Every user-visible host string goes through `t()`: messages, errors, warnings, modal text and buttons in `commands.ts`, `codex/codexCommands.ts`, `tools.ts`, `statusBar.ts`, `extension.ts`; reasons returned or thrown by pure modules (`paths.checkSafeToDelete`, `codexPaths.checkCodexSafeToDelete` and `copyCodexSeed` skip reasons, `codexState.preCheck` reasons and thrown errors, `codexServer.planRestart` errors, `labels.validate` messages); QuickPick labels and placeholders.
+- Webview side: `src/webview/i18n.ts` has its own `en` / `zh-cn` tables and a `t(key, params)` that uses the current `state.locale`. All Webview strings (tabs, section titles, banners, buttons, titles/tooltips, aria-labels, placeholders, help text, validation messages, version card, disabled Codex page, tools) go through it.
+- Key-parity rule: in both places the `en` table is the source of truth (`MessageKey = keyof typeof en`), and the `zh-cn` table is typed `Record<MessageKey, string>`, so a missing or extra key is a type error.
+- Never localized: the rc marker block written to `~/.profile` / `~/.bashrc` (`codexState.rcBlock()`, byte-identical in every language), shell commands, file names, setting ids, command ids, and terminal names (`Claude (<label>)` / `Codex (<label>)`). The external-directory row keeps an internal sentinel name (`EXTERNAL_NAME`) for logic and displays `t('account.external')` ("External directory" / "外部目录").
+
+## 6. Commands and flows
+
+Panel actions call the flow functions inside `commands.ts` directly through Webview messages, without going through the commands below; the commands in the table are Command Palette entries, all in the category "Claude Account" ("Claude 账号"). Titles come from `package.nls*.json`.
+
+| Command id | Title | Behavior |
+|---|---|---|
+| `aiSwitcher.switchAccount` | Switch Account | Shows a QuickPick of the registered accounts that are not current; the selected one goes through 6.1 |
+| `aiSwitcher.addAccount` | Add Account (Focus Sidebar Input) | Only opens the sidebar and focuses the add input at the bottom, see 6.2 |
+| `aiSwitcher.removeAccount` | Delete Account | Shows a QuickPick of the non-default accounts; the selected one goes through 6.3 (modal confirmation) |
+| `aiSwitcher.openTerminal` | Run claude in Terminal with Account | Shows a QuickPick of the registered accounts (also the external directory when it is current), see 6.4 |
+| `aiSwitcher.refresh` | Refresh | Scans `~/.claude-*` to register unregistered directories, re-reads each directory's email and sign-in state, refreshes the panel and the status bar |
+
+Each QuickPick item shows the display name (the alias for accounts that have one), the email ("Not logged in" when there is none) and the directory; when there is nothing to pick, the message "No accounts to choose from." is shown. Every message and terminal name uses the display name of the account; logic still uses name / dir.
+
+### 6.1 Switch
+
+Entry points: the row's switch button in the panel, double-clicking a non-current row, focusing a non-current row and pressing Enter, the Command Palette.
+
+1. If the target already is the current account, return immediately (the panel's current row offers no switch, and the QuickPick does not list the current account).
+2. Read `claudeCode.environmentVariables` and build a new array (never mutate the value returned by `get()`): keep other entries, remove all entries with `name === "CLAUDE_CONFIG_DIR"`; if the target is not the default account, append `{ name: "CLAUDE_CONFIG_DIR", value: <absolute path> }`. Paths use `path.resolve`, no trailing slash, no `~`. If the original value is in object form, write it back as an array.
+3. `await config.update(key, next, ConfigurationTarget.Global)`, wrapped in try/catch; on failure show the error "Switch failed. Possible causes: the official Claude Code extension is not installed on the WSL side, or the remote settings.json has a syntax error. Original error: <error>".
+4. After a successful write no notification is shown; instead the panel's `switchedTo` is set and the reload banner appears at the top of the panel (see 5.1); the status bar is updated.
+5. If the panel is not visible at that moment (never opened, or hidden), fall back to a non-modal notification: "Switched to X. New sessions will use this account; sessions already open are still using the old account." with a "Reload Window" button. The notification does not block the caller; the switch function returns immediately. The banner state is set as well, so opening the panel later still shows the banner.
+6. When switching to a signed-out account, the official panel shows its sign-in screen automatically, and you can sign in right there (paste code under WSL).
+
+### 6.2 Add
+
+1. Entry point: the always-present input at the bottom of the panel. The Command Palette's `aiSwitcher.addAccount` only focuses that input: `panel.focusAdd('claude')` runs `aiSwitcher.accounts.focus` to open the panel and then sends `focusAdd` to the frontend (the frontend switches to the Claude tab and focuses the input).
+2. Live frontend validation (immediate hints, not authoritative): matches `^[A-Za-z0-9_-]+$`; not equal to `default`; not equal to the `name` or `label` of an account row currently shown. An empty input shows no error, it only disables the button.
+3. The frontend submits an `add` message; the extension performs the authoritative validation on the trimmed name and sends the reason back to the panel on failure:
+   - empty: "Enter an account name";
+   - does not match `^[A-Za-z0-9_-]+$`: "Only letters, digits, underscores and hyphens are allowed";
+   - equals `default`: "Cannot use the reserved name default";
+   - same as a registered account: "An account with this name already exists";
+   - equals the current alias of any account of the same vendor: "Same as an existing account's display name";
+   - its directory is the same as the default directory: "This account directory is the same as the default account directory".
+4. Directory `~/.claude-<name>`: created (mode 0700) if it does not exist; reused as is, without clearing, if it exists.
+5. If `settings.json` exists in the default directory and the target directory has no `settings.json`, a copy is made as a starting point (written with mode 0600, never overwriting an existing target), with the following keys stripped (no effect if a key is absent):
+   - under `env`: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`
+   - top-level: `apiKeyHelper`, `forceLoginMethod`, `forceLoginOrgUUID`, `enabledPlugins`, `extraKnownMarketplaces`, `additionalMarketplaces`
+   `.claude.json` and `.credentials.json` are not copied.
+   Then `linkGlobalRules(dir)` is called: `CLAUDE.md` is symlinked to `~/.claude/CLAUDE.md` (the default file is created empty first if missing; an own file already in the target is kept); a failure only shows a warning and does not block.
+6. If creating the directory or copying the settings fails, "Failed to create account directory: <reason>" is sent back and shown in the panel's help line, and the account is not registered.
+7. Write to `globalState` (also removing the directory from `ignoredDirs`), refresh the panel and the status bar (file watchers are synced).
+8. Send back `addResult`: on success the frontend clears the input. No follow-up message after adding; to sign in, click the row's terminal button, or switch and sign in from the official panel.
+
+### 6.3 Remove
+
+1. Only non-default accounts can be removed: in the panel the default row and the external-directory row have no remove button, and the extension only acts on rows with `kind === "named"`; the Command Palette QuickPick only lists non-default accounts.
+2. First confirmation:
+   - panel entry: the inline confirmation (see 5.1); after it the extension shows no further dialog;
+   - Command Palette entry: a modal confirmation "Delete account X?" with the button "Delete".
+3. The current account cannot be removed: in the panel the current row has no remove button, and the Command Palette QuickPick does not list the current account; if called for the current account anyway, the warning "X is the current account and cannot be deleted. Switch to another account first." is shown and the flow returns.
+4. Remove it from `globalState`, record the directory in `ignoredDirs`, clear its alias with `labels.remove(name)`, refresh the panel and the status bar.
+5. Deleting the directory is always confirmed a second time with a system modal (regardless of the entry point): "Account X was removed from the list. Also delete directory <dir>?" with the button "Delete Directory". The detail explains that the directory contains the account's credentials and session history and cannot be recovered after deletion, and that if you just switched away from this account without reloading, open sessions are still using this directory.
+6. Checks before deleting the directory; if any fails, deletion is refused: `path.resolve(dir)` is a direct child of `os.homedir()`; the basename matches `^\.claude-[A-Za-z0-9_-]+$`; after resolving symlinks it does not point to the default directory; `lstat` exists, is not a symlink and is a directory. When they pass, `fs.promises.rm(dir, { recursive: true, force: true })` is used, never a shell. On failure: "Failed to delete directory: <reason>".
+
+### 6.4 Open claude in a terminal
+
+Entry points: the row's terminal button in the panel (every row, including the external-directory row), the Command Palette.
+
+- `vscode.window.createTerminal({ name: "Claude (<name>)", env: { CLAUDE_CONFIG_DIR: <dir> } })`; no env for the default account.
+- The command sent is `env CLAUDE_CONFIG_DIR='<absolute path>' claude`, which bypasses a possible `export CLAUDE_CONFIG_DIR` in rc files such as `~/.bashrc`; the `env` parameter of `createTerminal` is a second safeguard. The default account gets no variable; `claude` is sent directly.
+- The terminal is `show()`n. The first run in a new directory goes through Claude Code's first-run onboarding; under WSL sign-in uses paste code.
+- When a terminal created by this extension closes, the panel and the status bar are refreshed; if it was a non-default account and the account info file still has no email, the message "Login did not land in this directory: no login info found under <dir>. Check whether ~/.bashrc or similar overrides CLAUDE_CONFIG_DIR, or reopen the terminal and log in again." is shown.
+
+### 6.5 Rename an account
+
+Entry point: the pencil icon of any non-external row in the panel; after typing inline, Enter submits `rename` (with `mode`, `dir`, `label`; there is no Command Palette entry).
+
+1. The extension looks up the row with `panel.resolve('claude', dir)`; if not found or `kind === 'external'`, the message is ignored (the external-directory row cannot be renamed).
+2. `labels.validate(label, account.name, existing)`, where `existing` is `store.all()` mapped to `{ name, label: labelFor(name, labels) }`: empty after trim → "Enter a display name"; more than 32 characters → "Display name can be at most 32 characters"; contains a line break → "Display name cannot contain line breaks"; equals the external-directory name → "Cannot use the reserved name <value>"; same as the name of another account of the same vendor → "Same as an existing account name"; same as the label of another account of the same vendor → "Same as an existing account's display name" (the account itself is excluded from the comparison). On error, `post({ type: 'renameResult', mode, dir, error })` and the frontend shows it in red inline.
+3. If valid, `labels.set(account.name, <trimmed value>)`; when the value equals the account's own name, the entry is deleted (alias cleared).
+4. Refresh the panel and the status bar, `post({ type: 'renameResult', mode, dir })`, and the frontend leaves edit state.
+5. Directory, internal name and `CLAUDE_CONFIG_DIR` do not change; the alias only affects display. The same alias is allowed across Claude and Codex.
+
+### 6.6 Tools (footer toolbar and per-page "Tools" row)
+
+On the host all tools are handled by `runTool(mode, tool, deps)` in `src/tools.ts`, shared by the panel's `tool` message and the Command Palette entries; the dependencies `ToolDeps` (`codexRestart` / `postVersions` / `claudeDirs` / `codexDirs`) are assembled in `extension.ts`.
+
+- Footer toolbar (shared by both pages, left to right): show CLI and extension versions `cliVersions`, reload window `reloadWindow` (`workbench.action.reloadWindow`, no confirmation), restart extension host `restartExtHost` (`workbench.action.restartExtensionHost`, no confirmation), restart WSL server `restartServer` (calls `deps.codexRestart`, i.e. `restartServerInteractive` in codexCommands: modal confirmation + `planRestart` checks; when Codex is not initialized: "The Codex part is not initialized; cannot restart the WSL server.").
+- `cliVersions`: runs `execFile('claude', ['--version'])` and `execFile('codex', ['--version'])` in parallel (no shell, 8-second timeout; ENOENT → "Not found", timeout → "Timed out", other → "Failed: <first line>"), then reads `vscode.extensions.getExtension('anthropic.claude-code' / 'openai.chatgpt')?.packageJSON.version` ("Not found" when absent). The panel entry sends a `versions` message through `deps.postVersions`, and the frontend expands the version card above the toolbar (title "CLI and extension versions" + close button; each of the four items on two vertical lines: label / value, the value in monospace and wrappable; clicking the info button again or close collapses it); the Command Palette entry (`postVersions` unset) shows a read-only QuickPick. No network access.
+- Per-page "Tools" row: `openGlobalMd` (Claude → `<currentDir()>/CLAUDE.md`, Codex → `<effectiveDir()>/AGENTS.md`; when missing, a modal asks "File does not exist. Create it?", and on confirmation an empty file is created with 0600 and then opened with `showTextDocument`), `openSettings` (`workbench.action.openSettings` with `claudeCode.` / `chatgpt.`), `syncRules` (calls `linkGlobalRules` for every directory of `deps.claudeDirs()` / `deps.codexDirs()`, i.e. `store.named()` of that vendor, counts the results and summarizes them in one `showInformationMessage`: "Linked N account(s)", "M account(s) already linked", "X, Y kept their own CLAUDE.md; merge manually, delete that file, then sync again", "Link failed: …"; with no accounts: "No other accounts need CLAUDE.md synced."; when the directory list is not provided, a message says that part is not initialized).
+- Shared global rules: `paths.linkRulesFile(dir, defDir, file)` is the generic implementation (default directory → `skipped-default`; default file missing → first created empty with 0600; target missing → symlink to the absolute path of the default file is created → `linked`; already a link to the default file → `already-linked`; a regular file or a link pointing elsewhere → left alone → `kept-own-file`); `paths.linkGlobalRules(dir)` fixes `CLAUDE.md`, `codexPaths.linkGlobalRules(dir)` fixes `AGENTS.md`. Adding an account calls it after copying the seed settings; a failure only warns and does not block (6.2 step 5). When an account directory is deleted the link goes with it; `fs.rm` does not follow symlinks, so the default account's file is not affected.
+- Command Palette entries (category "AI Account Switcher"): `aiSwitcher.tools.openClaudeMd`, `aiSwitcher.tools.openAgentsMd`, `aiSwitcher.tools.openSettings` (QuickPick Claude Code / Codex), `aiSwitcher.tools.reloadWindow`, `aiSwitcher.tools.restartExtHost`, `aiSwitcher.tools.cliVersions`, `aiSwitcher.tools.syncRules` (QuickPick Claude Code (CLAUDE.md) / Codex (AGENTS.md)); restarting the WSL server reuses `aiSwitcher.codex.restartServer`.
+- When Codex initialization fails (exception caught in `extension.ts`): the Codex page degrades to `{ accounts: [], enabled: false }`, non-`tool` messages of the Codex page and the 7 `aiSwitcher.codex.*` commands show "Codex account switching is unavailable: <reason>" instead; `tool` messages still go through `runTool`, with `ToolDeps.codexRestart` and `codexDirs` undefined.
+
+## 7. Refresh triggers
+
+- `onDidChangeConfiguration` affecting `claudeCode.environmentVariables`: refresh the panel and the status bar.
+- `onDidChangeConfiguration` affecting `aiSwitcher.language`: set the new locale, re-push the full panel state and update the status bar.
+- Every account directory currently shown in the panel (including the external-directory row) has an account info file watcher: it watches `claudeJsonPath(dir)`, i.e. `createFileSystemWatcher(new RelativePattern(Uri.file(<its directory>), <file name>))`, and on create/change/delete pushes the panel state and updates the status bar. Watchers are added/removed according to the current account rows on each panel refresh.
+- Push the state once when the panel becomes visible again.
+- After adding or removing an account.
+- `onDidCloseTerminal` matching a terminal created by this extension (as a supplement).
+- The user clicks the title-bar refresh button (which also scans `~/.claude-*` for unregistered directories).
+
+## 8. Platform guard
+
+- On `activate`, if `process.platform !== "linux"`, show the warning "AI Account Switcher only supports WSL/Linux." once (localized) and do not register the Webview view, the status bar or commands.
+- `package.json` declares `extensionKind: ["workspace"]`, so in a WSL window the extension is installed and runs on the WSL side.
+
+## 9. Code structure
+
+The sidebar was changed from a native TreeView to a Webview; the former `accountsView.ts` has been deleted.
+
+```
+src/
+  extension.ts        Activation, locale setup, platform guard, wiring of all modules (two LabelStores, one AccountsPanel, ToolDeps; degraded mode when Codex initialization fails), registration of the WebviewViewProvider and three command groups, watching setting changes
+  i18n.ts             Host i18n tables (en / zh-cn) and t(); no vscode import
+  i18nVscode.ts       resolveLocale() / watchLocale() for aiSwitcher.language
+  paths.ts            Default directory, account directories, account info file location, reading email and plan (formatClaudePlan / readAccountInfo), signed-in state, directory scan, settings copy, global rules links (linkRulesFile / linkGlobalRules), delete safety checks
+  accounts.ts         Account list storage (globalState)
+  labels.ts           LabelStore: storage and validation of per-account display names (aliases), keyed by name in claude.labels / codex.labels (legacy keys migrated automatically); labelFor(name, labels) returns the display name
+  claudeSettings.ts   Reads/writes CLAUDE_CONFIG_DIR in claudeCode.environmentVariables
+  commands.ts         Switch / add (incl. linking the global CLAUDE.md) / remove / open terminal / refresh / rename; handles Claude page messages (incl. tool); Command Palette entries
+  tools.ts            Tools: runTool (open the global rules file, open extension settings, reload window, restart extension host, restart WSL server, CLI and extension versions, sync rules) and registerToolCommands (aiSwitcher.tools.*)
+  accountsPanel.ts    Single WebviewViewProvider: holds the claude / codex PanelSources, generates the panel HTML and CSP, pushes the full PanelState (incl. locale), remembers the current tab, maintains file watchers for both watchTargets; claudePanelSource is defined here
+  protocol.ts         Message types between the extension and the Webview (shared, no runtime imports)
+  statusBar.ts        Status bar (shows alias, email and plan)
+  codex/              Codex account switching (see codex-design.md section 10)
+  webview/
+    main.ts           Webview frontend: tab bar, rendering of both pages (banner, account list, "Tools" row, add section), footer toolbar and version card, inline rename, live validation, messaging
+    i18n.ts           Webview i18n tables (en / zh-cn) and t() based on state.locale
+    panel.css         Panel styles (only --vscode-* theme variables; 340px container-query breakpoint; plan colors)
+    tsconfig.json     Frontend type-check config (DOM lib, includes ../protocol.ts)
+package.nls.json      English static strings for package.json
+package.nls.zh-cn.json  Chinese static strings for package.json
+```
+
+`contributes` in `package.json`: `commands` (with icons, 19 in total: 5 "Claude Account", 7 "Codex Account", 7 "AI Account Switcher"), `configuration` (`aiSwitcher.language`), `viewsContainers.activitybar`, `views` (a single `type: "webview"` view `aiSwitcher.accounts`, named "AI Account Switcher"), `menus.view/title` (only the refresh button, `when: view == aiSwitcher.accounts`). All user-facing static strings are `%key%` placeholders resolved from `package.nls*.json`. All commands stay in the Command Palette; no `menus.commandPalette` is declared; no `viewsWelcome` is declared.
+
+## 10. Dependencies and build
+
+- Runtime dependencies (`dependencies`, pinned exactly):
+  - `@vscode-elements/elements` 2.5.1: Web Components library for the Webview frontend (based on Lit).
+  - `@vscode/codicons` 0.0.45: icon font. The npm `latest` tag points to the prerelease 0.0.46-24, which does not satisfy the component library's peer dependency `>=0.0.40` (prereleases do not take part in normal range matching), so the latest stable 0.0.45 is pinned.
+  - Both are only bundled into the frontend artifacts, never into the extension host.
+- Development dependencies (2026-09-25): typescript 7.0.2, esbuild 0.28.2, @types/node 26.6.2, @vscode/vsce 4.0.0 are the latest stable versions; @types/vscode is pinned to 1.107.0.
+- `engines.vscode` is `^1.107.0`. The editor actually used is Antigravity IDE with a VS Code 1.107.0 core; an extension whose `engines` is higher than the editor version is refused. `@types/vscode` must not be higher than `engines`, so the latest version cannot be used; check the editor's core version before upgrading. New frontend dependencies must not require newer editor APIs either.
+- Build (`esbuild.mjs`, two entries):
+  - Extension host: `src/extension.ts` → `dist/extension.js` (cjs, platform node, target node20, external vscode, with sourcemap).
+  - Webview frontend: `src/webview/main.ts` → `dist/media/panel.js`, `src/webview/panel.css` → `dist/media/panel-style.css` (iife, platform browser, target es2022; regular builds minify without sourcemaps, watch mode does not minify and emits sourcemaps).
+  - At build start, `codicon.css` and `codicon.ttf` are copied from `node_modules/@vscode/codicons/dist/` to `dist/media/` (`node_modules` is not included in the vsix).
+  - With `--watch` both entries are watched.
+- Type checking uses separate tsconfigs: `npm run typecheck` runs `tsc --noEmit` (root `tsconfig.json`, host, types node and vscode, excludes `src/webview`), `tsc --noEmit -p src/webview` (frontend, lib includes dom, no node/vscode types, includes `../protocol.ts`) and `tsc --noEmit -p test` (tests).
+- Tests: `npm test` runs `scripts/run-tests.mjs`, which bundles `test/*.test.ts` with esbuild into `.test-out/` (with `vscode` aliased to `test/stubs/vscode.ts`) and runs `node --test`. Tests cover the pure modules and run every file-system operation under a temporary HOME.
+- Packaging: `vsce package` produces the `.vsix` (`vscode:prepublish` runs typecheck and build first; `.vscodeignore` excludes `src/`, `test/`, `scripts/`, `node_modules/`, `*.map`, docs, etc.; `package.nls*.json` are included). Installation: in a WSL window via "Extensions: Install from VSIX". This extension is never installed into the user's VS Code automatically.
+
+## 11. Known limitations and risks
+
+1. Open sessions do not follow a switch; after a reload all panels start over with the new account, and old session history stays in the old account directory.
+2. The machine setting is shared by all WSL windows: switching in one window also changes the account for new sessions in other windows, and the official panels in other windows refresh their display as well.
+3. Each account directory's `settings.json` is copied once at creation and is independent afterwards; changes are not synced.
+4. Every account directory has its own workspace trust records and first-run onboarding.
+5. If the user exports `CLAUDE_CONFIG_DIR` in `~/.bashrc` or similar, the extension host inherits it and the "default account" actually points to that directory instead of `~/.claude`. The extension uses `process.env.CLAUDE_CONFIG_DIR ?? ~/.claude` as the default directory to stay consistent.
+6. Signing in from a terminal requires a `claude` command on PATH; signing in from the panel does not.
+7. The extension depends on the official extension's behavior for `claudeCode.environmentVariables`; if the official extension changes the semantics of this setting, switching stops working, but no credentials are damaged.
+8. When `claude` is run in a terminal for a non-default account, the `/ide` integration is expected not to work (see fact 8); the native panel is not affected.
+9. Command titles, categories and the view name follow VS Code's display language, not `aiSwitcher.language` (platform limitation, see 5.5); with a mismatched setting, the Command Palette and the panel may show different languages.

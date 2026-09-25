@@ -1,0 +1,638 @@
+// Sidebar webview frontend: only renders and exchanges messages; all business logic lives in the extension host
+import '@vscode-elements/elements/dist/vscode-button/index.js';
+import '@vscode-elements/elements/dist/vscode-textfield/index.js';
+import '@vscode-elements/elements/dist/vscode-toolbar-button/index.js';
+import '@vscode-elements/elements/dist/vscode-icon/index.js';
+import type { AccountView, FromWebview, PanelMode, PanelState, TabState, ToolId, ToWebview } from '../protocol';
+import { getLocale, setLocale, t, type MessageKey } from './i18n';
+
+interface WebviewState {
+  tab?: PanelMode;
+}
+declare function acquireVsCodeApi(): {
+  postMessage(msg: FromWebview): void;
+  getState(): WebviewState | undefined;
+  setState(state: WebviewState): void;
+};
+const vscode = acquireVsCodeApi();
+const send = (msg: FromWebview): void => vscode.postMessage(msg);
+
+const NAME_RE = /^[A-Za-z0-9_-]+$/;
+const MAX_LABEL_LENGTH = 32;
+const MODES: PanelMode[] = ['claude', 'codex'];
+
+type TextField = HTMLElement & { value: string; invalid: boolean; focus(): void };
+type DistributiveOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
+// Messages sent from a page: all except ready / setTab carry a mode, which Page fills in
+type PageMessage = DistributiveOmit<Exclude<FromWebview, { type: 'ready' } | { type: 'setTab' }>, 'mode'>;
+
+let state: PanelState = {
+  active: 'claude',
+  claude: { enabled: true, accounts: [] },
+  codex: { enabled: false, accounts: [] },
+  locale: getLocale(),
+};
+// Tab remembered by the frontend; wins over the host's active (the host only decides when there is no local record yet)
+let activeTab: PanelMode | undefined = vscode.getState()?.tab;
+
+// Per-mode constants that are never translated (directory prefixes, file names); translated text lives in i18n.ts
+const TEXT = {
+  claude: { dirPrefix: '~/.claude-', mdLabel: 'CLAUDE.md' },
+  codex: { dirPrefix: '~/.codex-', mdLabel: 'AGENTS.md' },
+} as const;
+
+type Attrs = Record<string, string | boolean | undefined>;
+type Child = Node | string | null | undefined | false;
+
+// Builds nodes with the DOM API; all text goes in via textContent, never concatenated HTML
+function h(tag: string, attrs: Attrs = {}, ...children: Child[]): HTMLElement {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === false) continue;
+    if (k === 'class') el.className = String(v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of children) if (c) el.append(c);
+  return el;
+}
+
+function onClick<T extends HTMLElement>(el: T, fn: () => void): T {
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fn();
+  });
+  return el;
+}
+
+function toolbarButton(icon: string, label: string, fn: () => void): HTMLElement {
+  return onClick(h('vscode-toolbar-button', { icon, label, title: label, class: 'icon-btn' }), fn);
+}
+
+// Avatar color: a theme chart color picked stably from the account name
+const AVATAR_COLORS = ['blue', 'green', 'purple', 'orange', 'yellow', 'red'];
+function avatar(a: AccountView): HTMLElement {
+  let hash = 0;
+  for (const ch of a.name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  const color = AVATAR_COLORS[hash % AVATAR_COLORS.length];
+  const letter = a.kind === 'external' ? '?' : a.label.charAt(0).toUpperCase();
+  const el = h('div', { class: 'avatar', style: `--avatar-color: var(--vscode-charts-${color})` }, letter);
+  // Default account: a home badge at the avatar's bottom-right, so it is recognizable as the home-directory account even after renaming
+  if (a.kind === 'default') {
+    el.append(h('span', { class: 'avatar-badge', title: t('account.default'), role: 'img', 'aria-label': t('account.default') }, h('vscode-icon', { name: 'home', size: '9' })));
+  }
+  return el;
+}
+
+function planPill(a: AccountView): HTMLElement | null {
+  return a.plan ? h('span', { class: 'pill plan' }, a.plan) : null;
+}
+
+// Plan string -> color class (frontend-only mapping, written to data-plan for CSS)
+// Both sides share tiers by price: tier1 standard paid (Claude Pro / ChatGPT Plus), tier2 high (Claude Max 5x / ChatGPT Pro Lite), tier3 top (Claude Max 20x / ChatGPT Pro)
+function planClass(plan: string | undefined, mode: PanelMode): string {
+  if (!plan) return 'none';
+  if (/API/i.test(plan)) return 'apikey';
+  if (/^(Team|Business)\b/i.test(plan)) return 'team';
+  if (/^Enterprise\b/i.test(plan)) return 'enterprise';
+  if (/^(Free|Go)\b/i.test(plan)) return 'tier0';
+  if (mode === 'claude') {
+    if (/^Max\b.*20x/i.test(plan)) return 'tier3';
+    if (/^Max\b/i.test(plan)) return 'tier2';
+    if (/^Pro\b/i.test(plan)) return 'tier1';
+  } else {
+    if (/^Pro\s*Lite\b/i.test(plan)) return 'tier2';
+    if (/^Pro\b/i.test(plan)) return 'tier3';
+    if (/^Plus\b/i.test(plan)) return 'tier1';
+  }
+  return 'none';
+}
+
+// Without an email, show "Logged in" based on loggedIn
+function loginStatus(a: AccountView): HTMLElement | null {
+  if (a.email) return h('div', { class: 'row-sub' }, a.email);
+  if (a.loggedIn) return h('div', { class: 'row-sub ok' }, t('account.loggedIn'));
+  // Not logged in and no email: the "Not logged in" pill on line 3 already says so; no extra line
+  return null;
+}
+
+/** One tab page: its own add section, adding state, confirmingDir and inline-rename state */
+class Page {
+  readonly text: (typeof TEXT)[PanelMode];
+  readonly root: HTMLElement;
+  private readonly top = h('div', { class: 'page-top' });
+  private readonly addField: TextField;
+  private readonly addButton: HTMLElement & { disabled: boolean };
+  private readonly addHelp = h('div', { class: 'help' });
+  private readonly addTitle = h('span');
+  private tools: HTMLElement;
+  private readonly addSection: HTMLElement;
+  private adding = false;
+  // Account directory whose removal is being confirmed inline
+  private confirmingDir?: string;
+  // Inline rename state (keyed by dir, one row at a time): the field is created once and reused across re-renders to keep input and focus
+  private renamingDir?: string;
+  private renameField?: TextField;
+  private renameError?: string;
+  // Re-rendering moves the field node and fires blur, which must not count as cancel
+  private rendering = false;
+  // After Enter, while waiting for the host's renameResult: blur does not cancel, otherwise an error would have nowhere to show
+  private submitting = false;
+  private submittedLabel?: string;
+
+  constructor(readonly mode: PanelMode) {
+    this.text = TEXT[mode];
+    this.addField = h('vscode-textfield') as TextField;
+    this.addButton = h('vscode-button', { icon: 'add' }) as HTMLElement & { disabled: boolean };
+    this.addSection = h(
+      'section',
+      { class: 'section add' },
+      h('div', { class: 'section-title' }, this.addTitle),
+      h('div', { class: 'input-group' }, this.addField, this.addButton),
+      this.addHelp,
+    );
+    this.addField.addEventListener('input', () => this.updateAddHelp());
+    this.addField.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') this.submitAdd();
+    });
+    onClick(this.addButton, () => this.submitAdd());
+    this.tools = this.renderTools();
+    this.root = h('div', { class: 'page', role: 'tabpanel', id: `panel-${mode}` }, this.top, this.tools, this.addSection);
+    this.applyLocale();
+  }
+
+  // Refreshes the parts created once (add section, tools); the rest is rebuilt by render()
+  applyLocale(): void {
+    this.addField.setAttribute('placeholder', t('add.placeholder'));
+    this.addField.setAttribute('aria-label', t('add.ariaLabel'));
+    this.addButton.textContent = t('add.button');
+    this.addTitle.textContent = t('add.title');
+    const tools = this.renderTools();
+    this.tools.replaceWith(tools);
+    this.tools = tools;
+    if (this.renameField) {
+      this.renameField.setAttribute('aria-label', t('rename.ariaLabel'));
+      // Re-translate a local validation error; a host error is kept as sent
+      const self = this.tab.accounts.find((a) => a.dir === this.renamingDir);
+      const local = self && this.validateLabel(this.renameField.value, self);
+      if (local) this.renameError = local;
+    }
+  }
+
+  get tab(): TabState {
+    return state[this.mode];
+  }
+
+  private send(msg: PageMessage): void {
+    send({ ...msg, mode: this.mode });
+  }
+
+  focusAdd(): void {
+    this.addField.focus();
+  }
+
+  onState(): void {
+    if (this.confirmingDir && !this.tab.accounts.some((a) => a.dir === this.confirmingDir)) this.confirmingDir = undefined;
+    if (this.renamingDir && !this.tab.accounts.some((a) => a.dir === this.renamingDir)) this.stopRename();
+  }
+
+  onAddResult(error?: string): void {
+    this.adding = false;
+    if (error) this.updateAddHelp(error);
+    else {
+      this.addField.value = '';
+      this.updateAddHelp();
+    }
+  }
+
+  onRenameResult(dir: string, error?: string): void {
+    this.submitting = false;
+    if (error) {
+      // If this row left edit mode (Escape or another row), re-enter it with the submitted value so the error is visible
+      if (this.renamingDir !== dir) {
+        const target = this.tab.accounts.find((a) => a.dir === dir);
+        if (!target) return;
+        this.startRename(target);
+        if (this.submittedLabel !== undefined) this.renameField!.value = this.submittedLabel;
+      }
+      this.renameError = error;
+      this.renameField!.invalid = true;
+      this.render();
+      this.renameField!.focus();
+    } else if (this.renamingDir === dir) {
+      this.stopRename();
+      this.render();
+    }
+  }
+
+  // ---------- Inline rename (not for the external directory) ----------
+  private startRename(a: AccountView): void {
+    const field = h('vscode-textfield', { class: 'rename-field', 'aria-label': t('rename.ariaLabel'), value: a.label }) as TextField;
+    field.value = a.label;
+    field.addEventListener('input', () => {
+      this.renameError = this.validateLabel(field.value, a);
+      field.invalid = !!this.renameError;
+      this.syncRenameError();
+    });
+    field.addEventListener('keydown', (e) => {
+      const key = (e as KeyboardEvent).key;
+      if (key === 'Enter') {
+        e.preventDefault();
+        this.submitRename();
+      } else if (key === 'Escape') {
+        e.preventDefault();
+        this.stopRename();
+        this.render();
+      }
+    });
+    field.addEventListener('blur', () => {
+      if (this.rendering || this.submitting || this.renameField !== field) return;
+      this.stopRename();
+      this.render();
+    });
+    this.renamingDir = a.dir;
+    this.renameField = field;
+    this.renameError = undefined;
+    this.render();
+    // The component's first render is async; wait a frame before focusing and selecting all
+    requestAnimationFrame(() => {
+      field.focus();
+      field.shadowRoot?.querySelector('input')?.select();
+    });
+  }
+
+  private stopRename(): void {
+    this.renamingDir = undefined;
+    this.renameField = undefined;
+    this.renameError = undefined;
+  }
+
+  // Instant frontend validation; the host has the final say
+  private validateLabel(label: string, self: AccountView): string | undefined {
+    const value = label.trim();
+    if (!value) return t('validate.labelEmpty');
+    if (value.length > MAX_LABEL_LENGTH) return t('validate.labelTooLong', { max: MAX_LABEL_LENGTH });
+    if (/[\r\n]/.test(value)) return t('validate.labelNewline');
+    if (this.tab.accounts.some((a) => a.dir !== self.dir && (a.name === value || a.label === value))) return t('validate.labelDuplicate');
+    return undefined;
+  }
+
+  private submitRename(): void {
+    const field = this.renameField;
+    const dir = this.renamingDir;
+    const self = this.tab.accounts.find((a) => a.dir === dir);
+    if (!field || dir === undefined || !self) return;
+    const error = this.validateLabel(field.value, self);
+    if (error) {
+      this.renameError = error;
+      field.invalid = true;
+      this.syncRenameError();
+      return;
+    }
+    this.submitting = true;
+    this.submittedLabel = field.value.trim();
+    this.send({ type: 'rename', dir, label: this.submittedLabel });
+  }
+
+  private syncRenameError(): void {
+    const el = this.top.querySelector('.row-error');
+    if (this.renameError) {
+      if (el) el.textContent = this.renameError;
+      else this.renameField?.closest('.row')?.querySelector('.row-main')?.append(h('div', { class: 'row-error', role: 'alert' }, this.renameError));
+    } else el?.remove();
+  }
+
+  // ---------- Add account ----------
+  private validateName(name: string): string | undefined {
+    if (!name) return undefined;
+    if (!NAME_RE.test(name)) return t('validate.nameChars');
+    if (name === 'default') return t('validate.nameReserved');
+    if (this.tab.accounts.some((a) => a.name === name || a.label === name)) return t('validate.nameExists');
+    return undefined;
+  }
+
+  private updateAddHelp(serverError?: string): void {
+    const name = this.addField.value.trim();
+    const error = serverError ?? this.validateName(name);
+    this.addField.invalid = !!error;
+    this.addButton.disabled = this.adding || !name || !!error;
+    this.addHelp.className = error ? 'help error' : 'help';
+    this.addHelp.textContent =
+      error ?? (name ? t('add.helpCreate', { dir: this.text.dirPrefix + name }) : t('add.helpIdle', { prefix: this.text.dirPrefix }));
+  }
+
+  private submitAdd(): void {
+    const name = this.addField.value.trim();
+    if (this.adding || !name || this.validateName(name)) return;
+    this.adding = true;
+    this.updateAddHelp();
+    this.send({ type: 'add', name });
+  }
+
+  // ---------- Rendering ----------
+  // Codex not enabled: only the explanation and the "Enable" button
+  private renderDisabled(): HTMLElement {
+    return h(
+      'section',
+      { class: 'disabled-card' },
+      h('div', { class: 'disabled-icon' }, h('vscode-icon', { name: 'plug', size: '26' })),
+      h('div', { class: 'disabled-title' }, t('disabled.title')),
+      h('div', { class: 'disabled-text' }, t('disabled.text')),
+      h('div', { class: 'disabled-actions' }, onClick(h('vscode-button', { icon: 'check' }, t('disabled.enable')), () => this.send({ type: 'enable' }))),
+    );
+  }
+
+  // Codex: the state file changed but this window has not restarted the server yet
+  private renderPending(): HTMLElement | null {
+    if (this.mode !== 'codex' || !this.tab.pendingDir) return null;
+    return h(
+      'div',
+      { class: 'banner', role: 'status' },
+      h('vscode-icon', { name: 'info', class: 'banner-icon' }),
+      h(
+        'div',
+        { class: 'banner-body' },
+        h('div', { class: 'banner-title' }, t('pending.title', { name: this.tab.pendingDir })),
+        h('div', { class: 'banner-text' }, t('pending.text')),
+        h(
+          'div',
+          { class: 'banner-actions' },
+          onClick(h('vscode-button', { icon: 'debug-restart' }, t('pending.restart')), () => this.send({ type: 'restartServer' })),
+        ),
+      ),
+    );
+  }
+
+  // Claude: reload banner
+  private renderBanner(): HTMLElement | null {
+    if (this.mode !== 'claude' || !this.tab.switchedTo) return null;
+    return h(
+      'div',
+      { class: 'banner', role: 'status' },
+      h('vscode-icon', { name: 'info', class: 'banner-icon' }),
+      h(
+        'div',
+        { class: 'banner-body' },
+        h('div', { class: 'banner-title' }, t('banner.title', { name: this.tab.switchedTo })),
+        h('div', { class: 'banner-text' }, t('banner.text')),
+        h(
+          'div',
+          { class: 'banner-actions' },
+          onClick(h('vscode-button', { icon: 'refresh' }, t('common.reloadWindow')), () => this.send({ type: 'reload' })),
+        ),
+      ),
+      toolbarButton('close', t('banner.dismiss'), () => this.send({ type: 'dismissBanner' })),
+    );
+  }
+
+  private renderRow(a: AccountView): HTMLElement {
+    const classes = ['row'];
+    if (a.isCurrent) classes.push('is-current');
+
+    if (this.confirmingDir === a.dir) {
+      return h(
+        'li',
+        { class: classes.concat('is-confirming').join(' '), 'data-plan': planClass(a.plan, this.mode) },
+        h('div', { class: 'confirm-text' }, h('vscode-icon', { name: 'trash' }), t('confirm.text', { name: a.label })),
+        h('div', { class: 'confirm-hint' }, t('confirm.hint')),
+        h(
+          'div',
+          { class: 'confirm-actions' },
+          onClick(h('vscode-button', {}, t('confirm.remove')), () => {
+            this.confirmingDir = undefined;
+            this.send({ type: 'remove', dir: a.dir });
+            this.render();
+          }),
+          onClick(h('vscode-button', { secondary: true }, t('confirm.cancel')), () => {
+            this.confirmingDir = undefined;
+            this.render();
+          }),
+        ),
+      );
+    }
+
+    const editing = this.renamingDir === a.dir && !!this.renameField;
+    if (editing) classes.push('is-editing');
+
+    const actions = h('div', { class: 'row-actions' });
+    if (!editing) {
+      if (a.kind !== 'external') actions.append(toolbarButton('edit', t('row.rename'), () => this.startRename(a)));
+      if (!a.isCurrent) actions.append(toolbarButton('arrow-swap', t('row.switch'), () => this.send({ type: 'switch', dir: a.dir })));
+      // Not logged in: a "Log in" text button; logged in: a terminal icon to run the CLI with this account
+      if (a.loggedIn) {
+        actions.append(toolbarButton('terminal', t(`${this.mode}.terminalTitle`), () => this.send({ type: 'terminal', dir: a.dir })));
+      } else {
+        actions.append(
+          onClick(h('vscode-button', { class: 'login-button', title: t(`${this.mode}.loginTitle`) }, t('row.login')), () => this.send({ type: 'terminal', dir: a.dir })),
+        );
+      }
+      // The current account cannot be removed
+      if (a.kind === 'named' && !a.isCurrent) {
+        actions.append(
+          toolbarButton('trash', t('row.remove'), () => {
+            this.confirmingDir = a.dir;
+            this.render();
+          }),
+        );
+      }
+    }
+
+    // Current account: an icon at the right of the name line (omitted in edit mode, where the field fills the line)
+    const currentIcon =
+      a.isCurrent && !editing && h('span', { class: 'current-icon', title: t('account.current'), role: 'img', 'aria-label': t('account.current') }, h('vscode-icon', { name: 'check', size: '10' }));
+    const title = editing ? h('div', { class: 'row-title' }, this.renameField!) : h('div', { class: 'row-title' }, h('span', { class: 'row-name' }, a.label), currentIcon);
+    // Line 3: tags on the left + action buttons on the right; on wide panels CSS moves them back to line 1 and the right side
+    const tags = h('div', { class: 'row-tags' }, planPill(a), !a.loggedIn && h('span', { class: 'pill warn' }, t('account.notLoggedIn')));
+
+    // .row-main is display: contents, so its lines land directly in the .row grid
+    const row = h(
+      'li',
+      { class: classes.join(' '), 'data-plan': planClass(a.plan, this.mode), tabindex: a.isCurrent || editing ? undefined : '0' },
+      avatar(a),
+      h(
+        'div',
+        { class: 'row-main' },
+        title,
+        loginStatus(a),
+        // The current account gets an extra line with its directory
+        a.isCurrent && h('div', { class: 'row-dir' }, a.dirLabel),
+        !editing && h('div', { class: 'row-foot' }, tags, actions),
+        !a.loggedIn && !a.isCurrent && h('div', { class: 'row-hint' }, t(`${this.mode}.loginHint`)),
+        editing && this.renameError && h('div', { class: 'row-error', role: 'alert' }, this.renameError),
+      ),
+    );
+    // Double-click on a non-current row switches; single click does nothing, to avoid accidents
+    if (!a.isCurrent && !editing) {
+      row.addEventListener('dblclick', () => this.send({ type: 'switch', dir: a.dir }));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target === row) this.send({ type: 'switch', dir: a.dir });
+      });
+    }
+    return row;
+  }
+
+  // Page tools: open global CLAUDE.md / AGENTS.md, open extension settings, sync rules (shown even when Codex is not enabled)
+  private renderTools(): HTMLElement {
+    const btn = (icon: string, label: string, title: string, tool: ToolId): HTMLElement =>
+      onClick(h('vscode-button', { secondary: true, icon, title }, label), () => this.send({ type: 'tool', tool }));
+    return h(
+      'section',
+      { class: 'section page-tools' },
+      h('div', { class: 'section-title' }, h('span', {}, t('tools.title'))),
+      h(
+        'div',
+        { class: 'page-tools-row' },
+        btn('symbol-ruler', this.text.mdLabel, t(`${this.mode}.mdTitle`), 'openGlobalMd'),
+        btn('settings-gear', t('tools.settings'), t(`${this.mode}.settingsTitle`), 'openSettings'),
+        btn('link', t('tools.syncRules'), t('tools.syncRulesTitle'), 'syncRules'),
+      ),
+    );
+  }
+
+  private renderList(): HTMLElement {
+    // The current account always comes first; the rest keep their order
+    const accounts = this.tab.accounts;
+    const ordered = [...accounts.filter((a) => a.isCurrent), ...accounts.filter((a) => !a.isCurrent)];
+    return h(
+      'section',
+      { class: 'section' },
+      h('div', { class: 'section-title' }, h('span', {}, t('list.title')), h('span', { class: 'count' }, String(this.tab.accounts.length))),
+      h('ul', { class: 'list' }, ...ordered.map((a) => this.renderRow(a))),
+    );
+  }
+
+  render(): void {
+    this.rendering = true;
+    try {
+      if (!this.tab.enabled) {
+        this.top.replaceChildren(this.renderDisabled());
+        this.addSection.hidden = true;
+        return;
+      }
+      this.addSection.hidden = false;
+      this.top.replaceChildren(
+        ...[this.renderPending(), this.renderBanner(), this.renderList()].filter((n): n is HTMLElement => !!n),
+      );
+      this.updateAddHelp();
+    } finally {
+      this.rendering = false;
+    }
+    // Re-rendering moved the field node and lost focus; restore it
+    if (this.renameField && !this.root.hidden) this.renameField.focus();
+  }
+}
+
+// ---------- Tab bar and page assembly ----------
+const pages: Record<PanelMode, Page> = { claude: new Page('claude'), codex: new Page('codex') };
+function tabButton(mode: PanelMode): HTMLElement {
+  return onClick(h('button', { class: 'tab', type: 'button', role: 'tab', 'aria-controls': `panel-${mode}` }), () => {
+    if (activeTab === mode) return;
+    setActiveTab(mode);
+    send({ type: 'setTab', mode });
+  });
+}
+const tabButtons: Record<PanelMode, HTMLElement> = { claude: tabButton('claude'), codex: tabButton('codex') };
+const tabBar = h('div', { class: 'tabs', role: 'tablist' }, tabButtons.claude, tabButtons.codex);
+
+function setActiveTab(mode: PanelMode): void {
+  activeTab = mode;
+  vscode.setState({ tab: mode });
+  renderTabs();
+}
+
+function renderTabs(): void {
+  const active = activeTab ?? state.active;
+  for (const mode of MODES) {
+    const selected = mode === active;
+    tabButtons[mode].classList.toggle('is-active', selected);
+    tabButtons[mode].setAttribute('aria-selected', String(selected));
+    tabButtons[mode].tabIndex = selected ? 0 : -1;
+    pages[mode].root.hidden = !selected;
+  }
+}
+
+const app = document.getElementById('app')!;
+app.append(tabBar, pages.claude.root, pages.codex.root);
+
+// Fixed toolbar at the bottom of the panel: shared by both pages, mode is the current tab
+const FOOTER_TOOLS = [
+  ['info', 'footer.versions', 'cliVersions'],
+  ['refresh', 'common.reloadWindow', 'reloadWindow'],
+  ['debug-restart', 'footer.restartExtHost', 'restartExtHost'],
+  ['server-process', 'footer.restartServer', 'restartServer'],
+] as const satisfies ReadonlyArray<readonly [icon: string, title: MessageKey, tool: ToolId]>;
+const footer = h('div', { class: 'tools', role: 'toolbar' });
+function renderFooter(): void {
+  footer.setAttribute('aria-label', t('tools.title'));
+  footer.replaceChildren(
+    ...FOOTER_TOOLS.map(([icon, title, tool]) => toolbarButton(icon, t(title), () => send({ type: 'tool', mode: activeTab ?? state.active, tool }))),
+  );
+}
+// Versions card: shown above the footer toolbar; the info button again or the close button hides it
+const versionsCard = h('div', { class: 'versions', hidden: true, role: 'status' });
+let versionItems: Array<{ label: string; value: string }> = [];
+function showVersions(items: Array<{ label: string; value: string }>): void {
+  if (!versionsCard.hidden) {
+    versionsCard.hidden = true;
+    return;
+  }
+  versionItems = items;
+  renderVersions();
+  versionsCard.hidden = false;
+}
+function renderVersions(): void {
+  const items = versionItems;
+  versionsCard.replaceChildren(
+    h('div', { class: 'versions-head' }, h('span', {}, t('versions.title')), toolbarButton('close', t('versions.close'), () => (versionsCard.hidden = true))),
+    h(
+      'div',
+      { class: 'versions-list' },
+      ...items.map((v) => h('div', { class: 'version-item' }, h('div', { class: 'version-label' }, v.label), h('div', { class: 'version-value' }, v.value))),
+    ),
+  );
+}
+app.after(versionsCard, footer);
+
+// Re-translates everything built once; render() rebuilds the rest
+function applyLocale(): void {
+  setLocale(state.locale);
+  for (const mode of MODES) tabButtons[mode].textContent = t(`tab.${mode}`);
+  tabBar.setAttribute('aria-label', t('tabs.ariaLabel'));
+  renderFooter();
+  renderVersions();
+  for (const mode of MODES) pages[mode].applyLocale();
+}
+
+function render(): void {
+  renderTabs();
+  for (const mode of MODES) pages[mode].render();
+}
+
+window.addEventListener('message', (e: MessageEvent<ToWebview>) => {
+  const msg = e.data;
+  if (msg.type === 'state') {
+    state = msg.state;
+    // The host sets <html lang> only once when it creates the webview; keep it in sync on every push
+    document.documentElement.lang = state.locale === 'zh-cn' ? 'zh-CN' : 'en';
+    if (state.locale !== getLocale()) applyLocale();
+    // No local record yet: adopt the host's tab and remember it
+    if (!activeTab) setActiveTab(state.active);
+    for (const mode of MODES) pages[mode].onState();
+    render();
+  } else if (msg.type === 'addResult') {
+    pages[msg.mode].onAddResult(msg.error);
+  } else if (msg.type === 'renameResult') {
+    pages[msg.mode].onRenameResult(msg.dir, msg.error);
+  } else if (msg.type === 'versions') {
+    showVersions(msg.items);
+  } else if (msg.type === 'focusAdd') {
+    if (activeTab !== msg.mode) {
+      setActiveTab(msg.mode);
+      send({ type: 'setTab', mode: msg.mode });
+    }
+    pages[msg.mode].focusAdd();
+  }
+});
+
+applyLocale();
+render();
+send({ type: 'ready' });

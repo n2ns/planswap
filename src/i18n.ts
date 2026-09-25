@@ -1,0 +1,319 @@
+// Host-side message tables and lookup. Must not import vscode so pure modules can use it.
+
+export type Locale = 'en' | 'zh-cn';
+
+// English is the source of truth for the key set.
+export const en = {
+  // Common
+  'common.continue': 'Continue',
+  'common.delete': 'Delete',
+  'common.deleteDir': 'Delete Directory',
+  'common.reloadWindow': 'Reload Window',
+  'common.loggedIn': 'Logged in',
+  'common.notLoggedIn': 'Not logged in',
+  'common.noAccounts': 'No accounts to choose from.',
+  'common.listSep': '; ',
+  'common.nameSep': ', ',
+  'account.external': 'External directory',
+  'account.alreadyCurrent': '{label} is already the current account.',
+  'account.dirMissing': 'Account directory does not exist: {dir}',
+  'account.createDirFailed': 'Failed to create account directory: {error}',
+  'account.linkRulesFailed': 'Account {name} was created, but linking the global {file} failed: {error}',
+  'account.removeDirPrompt': 'Account {label} was removed from the list. Also delete directory {dir}?',
+  'account.deleteDirFailed': 'Failed to delete directory: {error}',
+
+  // extension.ts
+  'ext.linuxOnly': 'AI Account Switcher only supports WSL/Linux.',
+  'ext.codexUnavailable': 'Codex account switching is unavailable: {error}',
+
+  // Account name validation (add account)
+  'name.empty': 'Enter an account name',
+  'name.invalid': 'Only letters, digits, underscores and hyphens are allowed',
+  'name.reserved': 'Cannot use the reserved name {name}',
+  'name.exists': 'An account with this name already exists',
+  'name.dupLabel': "Same as an existing account's display name",
+  'name.sameAsDefaultDir': 'This account directory is the same as the default account directory',
+
+  // Display name validation (labels.validate)
+  'label.empty': 'Enter a display name',
+  'label.tooLong': 'Display name can be at most {max} characters',
+  'label.newline': 'Display name cannot contain line breaks',
+  'label.dupName': 'Same as an existing account name',
+
+  // Claude commands
+  'claude.switchFailed':
+    'Switch failed. Possible causes: the official Claude Code extension is not installed on the WSL side, or the remote settings.json has a syntax error. Original error: {error}',
+  'claude.switched':
+    'Switched to {label}. New sessions will use this account; sessions already open are still using the old account.',
+  'claude.removeCurrent': '{label} is the current account and cannot be deleted. Switch to another account first.',
+  'claude.removeConfirm': 'Delete account {label}?',
+  'claude.removeDirDetail':
+    "The directory contains this account's login credentials and session history and cannot be recovered once deleted. If you just switched away from this account and have not reloaded the window, open sessions are still using this directory.",
+  'claude.pick.switch': 'Select the account to switch to',
+  'claude.pick.remove': 'Select the account to delete',
+  'claude.pick.terminal': 'Select the account to open claude with in a terminal',
+  'claude.loginNotLanded':
+    'Login did not land in this directory: no login info found under {dir}. Check whether ~/.bashrc or similar overrides CLAUDE_CONFIG_DIR, or reopen the terminal and log in again.',
+
+  // Codex commands
+  'codex.manualRestartHint':
+    'Manual alternative: close all Antigravity windows connected to this distro, wait at least 5 minutes, then reopen.',
+  'codex.switchConfirm':
+    "Switching the Codex account restarts Antigravity's WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
+  'codex.restartConfirm':
+    "Restart Antigravity's WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
+  'codex.restartPlanFailed': 'Cannot restart the WSL server automatically: {error}\n{hint}',
+  'codex.restartFailed': 'Failed to restart the WSL server: {error}\n{hint}',
+  'codex.rollbackMissingEnd': 'The marker block in {file} is missing its end marker; not rolled back. Please remove it manually',
+  'codex.enableFailed': 'Cannot enable Codex account switching: {error}',
+  'codex.enableFailedReasons': 'Cannot enable Codex account switching:\n{reasons}',
+  'codex.enableConfirm':
+    'The following marker block will be written to ~/.profile and ~/.bashrc to set CODEX_HOME in login shells. Continue?',
+  'codex.enableButton': 'Write',
+  'codex.writeRcFailed': 'Failed to write rc files: {error}',
+  'codex.rollbackFailedSuffix': '\nRollback failed: {errors}',
+  'codex.selfCheckFailed': 'Self-check failed; rc files were rolled back: {detail}',
+  'codex.selfCheckFailedRollbackFailed': 'Self-check failed: {detail}\nRollback failed: {errors}',
+  'codex.disableConfirm':
+    'The marker blocks in ~/.profile and ~/.bashrc will be removed and the selected Codex account cleared. CODEX_HOME in open windows does not change until the server restarts. Continue?',
+  'codex.disableButton': 'Disable',
+  'codex.disableFailed': 'Failed to disable: {error}',
+  'codex.writeStateFailed': 'Failed to write the state file: {error}',
+  'codex.seedSkipped': 'Account {name} was created; the following files were not copied:\n{list}',
+  'codex.seedSkippedItem': '{file}: {reason}',
+  'codex.removeEffective':
+    '{label} is the account in effect in this window and cannot be deleted. Switch to another account first.',
+  'codex.removeSelected':
+    '{label} is the selected account waiting for a restart to take effect and cannot be deleted. Switch to another account first.',
+  'codex.removeConfirm': 'Delete Codex account {label}?',
+  'codex.removeDirDetail':
+    "The directory contains this account's login credentials, sessions and local data and cannot be recovered once deleted.",
+  'codex.pick.switch': 'Select the Codex account to switch to',
+  'codex.pick.remove': 'Select the Codex account to delete',
+  'codex.pick.terminal': 'Select the account to run codex with in a terminal',
+
+  // codexPaths.copyCodexSeed skip reasons
+  'codex.seed.srcMissing': 'Source file does not exist',
+  'codex.seed.dstExists': 'Target already exists',
+  'codex.seed.readFailed': 'Failed to read source file',
+  'codex.seed.hasSection': 'Contains a {section} section',
+  'codex.seed.hasTopKey': 'Contains top-level key {key}',
+  'codex.seed.blocked': '{reason}; not copied',
+
+  // codexState.preCheck / removeRcBlocks / selfCheck
+  'codex.pre.notBash': 'Login shell is not bash (current SHELL={shell}); only bash is supported',
+  'codex.pre.shellUnset': 'unset',
+  'codex.pre.bashProfile': '{file} exists and does not source ~/.bashrc; login shells will not read ~/.profile',
+  'codex.pre.broken': 'Marker block is incomplete; please fix {file} manually',
+  'codex.pre.userExport': '{file} already has your own export CODEX_HOME, which conflicts',
+  'codex.rc.missingEnd': 'Marker block is incomplete (missing end marker); please check {file} manually',
+  'codex.self.bashFailed': 'Cannot run bash: {error}',
+  'codex.self.mismatch': 'CODEX_HOME in the login shell is "{actual}", expected "{expected}"{stderr}',
+  'codex.self.stderr': '; stderr: {stderr}',
+  'codex.self.error': 'Self-check error: {error}',
+
+  // codexServer.planRestart
+  'server.statUnparseable': 'Cannot parse stat format',
+  'server.notFound': 'Cannot find the WSL server process',
+  'server.notAntigravity': "Parent process is not Antigravity's WSL server: {cmdline}",
+  'server.noCommit': 'Cannot parse the commit from the server command line',
+  'server.pidReadFailed': 'Failed to read pid file: {file}',
+  'server.pidMismatch': 'The pid file does not match the server process',
+
+  // paths.checkSafeToDelete / codexPaths.checkCodexSafeToDelete
+  'del.notHomeChild': 'Directory is not a direct child of the home directory: {dir}',
+  'del.badName': 'Directory name does not match the {pattern} format: {dir}',
+  'del.isDefault': 'Cannot delete the default account directory: {dir}',
+  'del.missing': 'Directory does not exist: {dir}',
+  'del.symlink': 'Directory is a symbolic link; refusing to delete: {dir}',
+  'del.notDir': 'Path is not a directory: {dir}',
+  'del.daemonAlive': "This account's codex daemon is still running; refusing to delete: {dir}",
+
+  // tools.ts
+  'tools.codexNotInit': 'The Codex part is not initialized; cannot restart the WSL server.',
+  'tools.syncNotInit': 'The {vendor} part is not initialized; cannot sync rules.',
+  'tools.sync.linked': 'Linked {count} account(s)',
+  'tools.sync.already': '{count} account(s) already linked',
+  'tools.sync.kept': '{names} kept their own {file}; merge manually, delete that file, then sync again',
+  'tools.sync.failed': 'Link failed: {list}',
+  'tools.sync.failedItem': '{name}: {error}',
+  'tools.sync.summary': '{parts}.',
+  'tools.sync.nothing': 'No other accounts need {file} synced.',
+  'tools.fileMissingCreate': 'File does not exist. Create it?\n{file}',
+  'tools.create': 'Create',
+  'tools.createFailed': 'Failed to create file: {error}',
+  'tools.openFailed': 'Failed to open file: {error}',
+  'tools.ver.notFound': 'Not found',
+  'tools.ver.timeout': 'Timed out',
+  'tools.ver.failed': 'Failed: {error}',
+  'tools.ver.noOutput': '(no output)',
+  'tools.ver.claudeExt': 'Claude Code extension',
+  'tools.ver.codexExt': 'Codex extension',
+  'tools.ver.placeholder': 'CLI and extension versions (display only)',
+  'tools.pick.settings': 'Select the extension whose settings to open',
+  'tools.pick.syncRules': 'Select the vendor whose global rules to sync',
+  'tools.sync.claudeItem': 'Claude Code (CLAUDE.md)',
+  'tools.sync.codexItem': 'Codex (AGENTS.md)',
+};
+
+export type MessageKey = keyof typeof en;
+
+export const zhCn: Record<MessageKey, string> = {
+  'common.continue': '继续',
+  'common.delete': '删除',
+  'common.deleteDir': '删除目录',
+  'common.reloadWindow': '重新加载窗口',
+  'common.loggedIn': '已登录',
+  'common.notLoggedIn': '未登录',
+  'common.noAccounts': '没有可选择的账号。',
+  'common.listSep': '；',
+  'common.nameSep': '、',
+  'account.external': '外部目录',
+  'account.alreadyCurrent': '{label} 已是当前账号。',
+  'account.dirMissing': '账号目录不存在：{dir}',
+  'account.createDirFailed': '创建账号目录失败：{error}',
+  'account.linkRulesFailed': '账号 {name} 已创建，但链接全局 {file} 失败：{error}',
+  'account.removeDirPrompt': '账号 {label} 已从列表移除。是否同时删除目录 {dir}？',
+  'account.deleteDirFailed': '删除目录失败：{error}',
+
+  'ext.linuxOnly': 'AI 账号切换器仅支持 WSL/Linux。',
+  'ext.codexUnavailable': 'Codex 账号切换不可用：{error}',
+
+  'name.empty': '请输入账号名',
+  'name.invalid': '只能包含字母、数字、下划线和连字符',
+  'name.reserved': '不能使用保留名 {name}',
+  'name.exists': '已存在同名账号',
+  'name.dupLabel': '与已有账号的显示名相同',
+  'name.sameAsDefaultDir': '该账号目录与默认账号目录相同',
+
+  'label.empty': '请输入显示名',
+  'label.tooLong': '显示名最多 {max} 个字符',
+  'label.newline': '显示名不能包含换行',
+  'label.dupName': '与已有账号名相同',
+
+  'claude.switchFailed':
+    '切换失败。可能原因：官方 Claude Code 插件未安装在 WSL 侧；或远端 settings.json 存在语法错误。原始错误：{error}',
+  'claude.switched': '已切换到 {label}。新会话将使用该账号，已打开的会话仍在使用旧账号。',
+  'claude.removeCurrent': '{label} 是当前账号，不能删除。请先切换到其他账号。',
+  'claude.removeConfirm': '确定删除账号 {label}？',
+  'claude.removeDirDetail':
+    '目录内含该账号的登录凭据与会话历史，删除后无法恢复。若刚从该账号切走且尚未重新加载窗口，已打开的会话仍在使用此目录。',
+  'claude.pick.switch': '选择要切换到的账号',
+  'claude.pick.remove': '选择要删除的账号',
+  'claude.pick.terminal': '选择要在终端中打开 claude 的账号',
+  'claude.loginNotLanded':
+    '登录未落到该目录：{dir} 下未检测到登录信息。请检查 ~/.bashrc 等是否覆盖了 CLAUDE_CONFIG_DIR，或重新打开终端登录。',
+
+  'codex.manualRestartHint': '手动方式：关闭所有连接到该发行版的 Antigravity 窗口，等待至少 5 分钟后重新打开。',
+  'codex.switchConfirm':
+    '切换 Codex 账号会重启 Antigravity 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
+  'codex.restartConfirm':
+    '重启 Antigravity 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
+  'codex.restartPlanFailed': '无法自动重启 WSL 服务端：{error}\n{hint}',
+  'codex.restartFailed': '重启 WSL 服务端失败：{error}\n{hint}',
+  'codex.rollbackMissingEnd': '{file} 中的标记块缺少结束标记，未回滚，请手动删除',
+  'codex.enableFailed': '无法启用 Codex 账号切换：{error}',
+  'codex.enableFailedReasons': '无法启用 Codex 账号切换：\n{reasons}',
+  'codex.enableConfirm': '将在 ~/.profile 与 ~/.bashrc 中写入以下标记块，用于在登录 shell 中设置 CODEX_HOME。继续？',
+  'codex.enableButton': '写入',
+  'codex.writeRcFailed': '写入 rc 文件失败：{error}',
+  'codex.rollbackFailedSuffix': '\n回滚失败：{errors}',
+  'codex.selfCheckFailed': '自检失败，已回滚 rc 文件：{detail}',
+  'codex.selfCheckFailedRollbackFailed': '自检失败：{detail}\n回滚失败：{errors}',
+  'codex.disableConfirm':
+    '将删除 ~/.profile 与 ~/.bashrc 中的标记块并清除已选择的 Codex 账号。已打开窗口的 CODEX_HOME 在重启服务端前不变。继续？',
+  'codex.disableButton': '停用',
+  'codex.disableFailed': '停用失败：{error}',
+  'codex.writeStateFailed': '写入状态文件失败：{error}',
+  'codex.seedSkipped': '账号 {name} 已创建，以下文件未复制：\n{list}',
+  'codex.seedSkippedItem': '{file}：{reason}',
+  'codex.removeEffective': '{label} 是本窗口生效的账号，不能删除。请先切换到其他账号。',
+  'codex.removeSelected': '{label} 是已选择、等待重启后生效的账号，不能删除。请先切换到其他账号。',
+  'codex.removeConfirm': '确定删除 Codex 账号 {label}？',
+  'codex.removeDirDetail': '目录内含该账号的登录凭据、会话与本地数据，删除后无法恢复。',
+  'codex.pick.switch': '选择要切换到的 Codex 账号',
+  'codex.pick.remove': '选择要删除的 Codex 账号',
+  'codex.pick.terminal': '选择要在终端中运行 codex 的账号',
+
+  'codex.seed.srcMissing': '源文件不存在',
+  'codex.seed.dstExists': '目标已存在',
+  'codex.seed.readFailed': '源文件读取失败',
+  'codex.seed.hasSection': '含 {section} 段',
+  'codex.seed.hasTopKey': '含顶层键 {key}',
+  'codex.seed.blocked': '{reason}，不复制',
+
+  'codex.pre.notBash': '登录 shell 不是 bash（当前 SHELL={shell}），仅支持 bash',
+  'codex.pre.shellUnset': '未设置',
+  'codex.pre.bashProfile': '存在 {file} 且未 source ~/.bashrc，登录 shell 不会读取 ~/.profile',
+  'codex.pre.broken': '标记块不完整，请手工修复 {file}',
+  'codex.pre.userExport': '{file} 中已有用户自己的 export CODEX_HOME，存在冲突',
+  'codex.rc.missingEnd': '标记块不完整（缺少结束标记），请手工检查 {file}',
+  'codex.self.bashFailed': '无法运行 bash：{error}',
+  'codex.self.mismatch': '登录 shell 中 CODEX_HOME 为 "{actual}"，预期 "{expected}"{stderr}',
+  'codex.self.stderr': '；stderr：{stderr}',
+  'codex.self.error': '自检出错：{error}',
+
+  'server.statUnparseable': 'stat 格式无法解析',
+  'server.notFound': '找不到 WSL 服务端进程',
+  'server.notAntigravity': '父进程不是 Antigravity 的 WSL 服务端：{cmdline}',
+  'server.noCommit': '无法从服务端命令行解析 commit',
+  'server.pidReadFailed': '读取 pid 文件失败：{file}',
+  'server.pidMismatch': 'pid 文件与服务端进程不匹配',
+
+  'del.notHomeChild': '目录不是用户主目录的直接子目录：{dir}',
+  'del.badName': '目录名不符合 {pattern} 格式：{dir}',
+  'del.isDefault': '不能删除默认账号目录：{dir}',
+  'del.missing': '目录不存在：{dir}',
+  'del.symlink': '目录是符号链接，拒绝删除：{dir}',
+  'del.notDir': '路径不是目录：{dir}',
+  'del.daemonAlive': '该账号的 codex 守护进程仍在运行，拒绝删除：{dir}',
+
+  'tools.codexNotInit': 'Codex 部分未初始化，无法重启 WSL 服务端。',
+  'tools.syncNotInit': '{vendor} 部分未初始化，无法同步规则。',
+  'tools.sync.linked': '已链接 {count} 个账号',
+  'tools.sync.already': '{count} 个账号已是链接',
+  'tools.sync.kept': '{names} 保留了自己的 {file}，可手动合并后删除该文件再同步',
+  'tools.sync.failed': '链接失败：{list}',
+  'tools.sync.failedItem': '{name}：{error}',
+  'tools.sync.summary': '{parts}。',
+  'tools.sync.nothing': '没有其他账号需要同步 {file}。',
+  'tools.fileMissingCreate': '文件不存在，是否创建？\n{file}',
+  'tools.create': '创建',
+  'tools.createFailed': '创建文件失败：{error}',
+  'tools.openFailed': '打开文件失败：{error}',
+  'tools.ver.notFound': '未找到',
+  'tools.ver.timeout': '执行超时',
+  'tools.ver.failed': '执行失败：{error}',
+  'tools.ver.noOutput': '（无输出）',
+  'tools.ver.claudeExt': 'Claude Code 插件',
+  'tools.ver.codexExt': 'Codex 插件',
+  'tools.ver.placeholder': 'CLI 与插件版本（仅展示）',
+  'tools.pick.settings': '选择要打开设置的插件',
+  'tools.pick.syncRules': '选择要同步全局规则的厂家',
+  'tools.sync.claudeItem': 'Claude Code（CLAUDE.md）',
+  'tools.sync.codexItem': 'Codex（AGENTS.md）',
+};
+
+const tables: Record<Locale, Record<MessageKey, string>> = { en, 'zh-cn': zhCn };
+
+let current: Locale = 'en';
+
+export function setLocale(l: Locale): void {
+  current = l;
+}
+
+export function getLocale(): Locale {
+  return current;
+}
+
+/** Looks up a message in the current locale and fills `{name}` placeholders; unknown placeholders are left as-is. */
+export function t(key: MessageKey, params?: Record<string, string | number>): string {
+  const text = tables[current][key];
+  if (!params) return text;
+  return text.replace(/\{(\w+)\}/g, (m, name: string) => (name in params ? String(params[name]) : m));
+}
+
+/** The message in every locale (e.g. to reserve all localized display names). */
+export function translationsOf(key: MessageKey): string[] {
+  return Object.values(tables).map((table) => table[key]);
+}

@@ -1,0 +1,14 @@
+src/**
+test/**
+scripts/**
+.test-out/**
+node_modules/**
+esbuild.mjs
+tsconfig.json
+.gitignore
+**/*.map
+*.vsix
+docs/**
+AGENTS.md
+CLAUDE.md
+.vscode/**

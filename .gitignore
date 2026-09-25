@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+.test-out/
+*.tsbuildinfo
+
+# Packaged extension
+*.vsix
+
+# VS Code runtime downloaded by extension tests
+.vscode-test/
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS and editor temporary files
+.DS_Store
+Thumbs.db
+*.swp
