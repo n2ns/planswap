@@ -57,7 +57,7 @@ export const en = {
   'disabled.enable': 'Enable Codex switching',
 
   'pending.title': '{name} selected; takes effect after restarting the server',
-  'pending.text': 'Restarting the server disconnects all WSL windows; integrated terminals close.',
+  'pending.text': 'Restarting the server disconnects all WSL windows (reload or reopen them); integrated terminals close.',
   'pending.restart': 'Restart server',
 
   'banner.title': 'Switched to {name}',
@@ -133,7 +133,7 @@ export const zhCn: Record<MessageKey, string> = {
   'disabled.enable': '启用 Codex 切换',
 
   'pending.title': '已选择 {name}，重启服务端后生效',
-  'pending.text': '重启服务端会断开所有 WSL 窗口，集成终端关闭。',
+  'pending.text': '重启服务端会断开所有 WSL 窗口（需重新加载或重新打开），集成终端关闭。',
   'pending.restart': '重启服务端',
 
   'banner.title': '已切换到 {name}',

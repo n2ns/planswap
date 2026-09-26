@@ -79,10 +79,14 @@ function removeRcBlockFrom(file: string): void {
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-// Editor display name (not localized) for kinds that support automatic restart
-function editorName(kind: ServerKind): string {
-  return kind === 'vscodium' ? 'VSCodium' : 'Antigravity';
-}
+// Editor display names (not localized); a Record so that a new kind cannot be left out
+const EDITOR_NAMES: Record<ServerKind, string> = {
+  antigravity: 'Antigravity',
+  vscodium: 'VSCodium',
+  vscode: 'VS Code',
+  unknown: '', // unused: the unknown kind never names an editor
+};
+const editorName = (kind: ServerKind): string => EDITOR_NAMES[kind];
 
 // Manual restart guidance for the given server kind
 function manualHint(kind: ServerKind): string {
@@ -285,7 +289,8 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
       return;
     }
     const kind = detectServerKind();
-    const confirmText = canAutoRestart(kind)
+    const auto = canAutoRestart(kind);
+    const confirmText = auto
       ? t('codex.switchConfirm', { editor: editorName(kind) })
       : t('codex.switchConfirmManual', { hint: manualHint(kind) });
     const continueLabel = t('common.continue');
@@ -298,7 +303,8 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
       return;
     }
     panel.refresh();
-    restart();
+    // Manual kinds already showed the instructions in the confirmation
+    if (auto) restart();
   }
 
   function validateName(name: string): string | undefined {

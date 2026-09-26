@@ -27,11 +27,17 @@ export function parseStatParentPid(statText: string): number {
   return ppid;
 }
 
-/** Server root from a server-main cmdline: the first token ending with /out/server-main.js, with that suffix stripped. */
-export function parseServerRoot(cmdline: string): string | undefined {
-  const token = cmdline.split(/\s+/).find((s) => s.endsWith(SERVER_MAIN));
-  const root = token?.slice(0, -SERVER_MAIN.length);
+/** Server root from a server-main argv: the first argument ending with /out/server-main.js, with that suffix stripped. */
+export function parseServerRoot(argv: string[]): string | undefined {
+  const arg = argv.find((s) => s.endsWith(SERVER_MAIN));
+  const root = arg?.slice(0, -SERVER_MAIN.length);
   return root ? root : undefined;
+}
+
+/** Data dir of a server root laid out as <dataDir>/bin/<version dir>; undefined for any other layout. */
+function dataDirOf(root: string): string | undefined {
+  const bin = path.dirname(root);
+  return path.basename(bin) === 'bin' ? path.dirname(bin) : undefined;
 }
 
 /** Whitelist mapping; dataDir must be exactly path.join(home, <name>). */
@@ -44,9 +50,9 @@ export function classifyDataDir(dataDir: string, home: string): ServerKind {
 /** Classifies the server that hosts this process (process.ppid). Never throws; any failure → 'unknown'. */
 export function detectServerKind(): ServerKind {
   try {
-    const root = parseServerRoot(readCmdline(process.ppid));
-    if (!root) return 'unknown';
-    return classifyDataDir(path.dirname(path.dirname(root)), os.homedir());
+    const root = parseServerRoot(readArgv(process.ppid));
+    const dataDir = root && dataDirOf(root);
+    return dataDir ? classifyDataDir(dataDir, os.homedir()) : 'unknown';
   } catch {
     return 'unknown';
   }
@@ -69,9 +75,9 @@ export function readServerCommit(root: string): string {
   return commit;
 }
 
-/** Reads /proc/<pid>/cmdline with \0 replaced by spaces. */
-export function readCmdline(pid: number): string {
-  return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ');
+/** Reads /proc/<pid>/cmdline as argv (split on \0, so arguments may contain spaces). */
+export function readArgv(pid: number): string[] {
+  return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter((s) => s !== '');
 }
 
 /** Walks numeric dirs under /proc and collects processes with ppid === parentPid (excluding process.pid). */
@@ -96,17 +102,15 @@ export function listChildren(parentPid: number): number[] {
   return children;
 }
 
-export function planRestart(): ServerPlan {
-  const ppid = process.ppid;
-  if (ppid <= 1) throw new Error(t('server.notFound'));
-
-  const cmdline = readCmdline(ppid);
-  const root = parseServerRoot(cmdline);
-  // Data dir layout: <home>/<dataDir>/bin/<version dir>
-  const dataDir = root ? path.dirname(path.dirname(root)) : '';
-  if (!cmdline.includes('out/server-main.js') || !cmdline.includes('--start-server')
-    || !root || !canAutoRestart(classifyDataDir(dataDir, os.homedir()))) {
-    throw new Error(t('server.unsupported', { cmdline: cmdline.slice(0, 120) }));
+/**
+ * Verifies an auto-restartable server from its argv and its parent (wrapper) pid; returns the commit.
+ * Only reads product.json and the pid file under home.
+ */
+export function verifyServer(argv: string[], wrapperPid: number, home: string): string {
+  const root = parseServerRoot(argv);
+  const dataDir = root && dataDirOf(root);
+  if (!root || !dataDir || !argv.includes('--start-server') || !canAutoRestart(classifyDataDir(dataDir, home))) {
+    throw new Error(t('server.unsupported', { cmdline: argv.join(' ').slice(0, 120) }));
   }
 
   const commit = readServerCommit(root);
@@ -121,11 +125,18 @@ export function planRestart(): ServerPlan {
     throw new Error(t('server.pidReadFailed', { file: pidFile }));
   }
   const filePid = Number(pidText.trim());
-  const wrapperPid = parseStatParentPid(fs.readFileSync(`/proc/${ppid}/stat`, 'utf8'));
   if (!Number.isInteger(filePid) || filePid !== wrapperPid) {
     throw new Error(t('server.pidMismatch'));
   }
+  return commit;
+}
 
+export function planRestart(): ServerPlan {
+  const ppid = process.ppid;
+  if (ppid <= 1) throw new Error(t('server.notFound'));
+
+  const wrapperPid = parseStatParentPid(fs.readFileSync(`/proc/${ppid}/stat`, 'utf8'));
+  const commit = verifyServer(readArgv(ppid), wrapperPid, os.homedir());
   return { serverPid: ppid, children: listChildren(ppid), commit };
 }
 

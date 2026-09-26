@@ -4,7 +4,7 @@
 
 ## [0.1.1] - 2026-09-26
 
-### Changed
+### Fixed
 
 - **Codex server restart across editors**: the editor is detected from the WSL server's data directory under `~` (whitelist). Antigravity (`~/.antigravity-ide-server`) and VSCodium (`~/.vscodium-server`) keep the automatic restart. VS Code (`~/.vscode-server`, `~/.vscode-server-insiders`) and unrecognized editors are never restarted automatically; switching and **Restart WSL Server** show manual instructions instead (close all windows connected to the distro, then reopen).
 - The server commit is now read from the server's `product.json` instead of the command line.

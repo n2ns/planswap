@@ -1,4 +1,4 @@
-// Only tests the pure parsers, classification, readServerCommit, listChildren and the throwing paths of planRestart; never calls executeRestart and never signals any process not started by this test
+// Only tests the pure parsers, classification, readServerCommit, verifyServer (temp HOME), listChildren and the throwing paths of planRestart; never calls executeRestart and never signals any process not started by this test
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
 import {
   canAutoRestart, classifyDataDir, detectServerKind, listChildren, parseServerRoot, parseStatParentPid, planRestart,
-  readCmdline, readServerCommit,
+  readArgv, readServerCommit, verifyServer,
 } from '../src/codex/codexServer';
 import { assertTempHome, makeTempHome, type TempHome } from './helpers';
 
@@ -34,23 +34,29 @@ describe('parseStatParentPid', () => {
 
 const COMMIT = 'ecfbad74d93962fc8ca485d93ab9b4f3d4cb6cf8';
 
+const serverArgv = (root: string, ...args: string[]): string[] => [`${root}/node`, `${root}/out/server-main.js`, ...args];
+
 describe('parseServerRoot', () => {
   test('Antigravity: bin/<version>-<commit>', () => {
     const root = `/home/u/.antigravity-ide-server/bin/2.5.5-${COMMIT}`;
-    assert.equal(parseServerRoot(`${root}/node ${root}/out/server-main.js --start-server --host=127.0.0.1 `), root);
+    assert.equal(parseServerRoot(serverArgv(root, '--start-server', '--host=127.0.0.1')), root);
   });
   test('VSCodium: bin/<commit>', () => {
     const root = `/home/u/.vscodium-server/bin/${COMMIT}`;
-    assert.equal(parseServerRoot(`${root}/node ${root}/out/server-main.js --start-server --enable-remote-auto-shutdown `), root);
+    assert.equal(parseServerRoot(serverArgv(root, '--start-server', '--enable-remote-auto-shutdown')), root);
   });
   test('VS Code: bin/<commit>', () => {
     const root = `/home/u/.vscode-server/bin/${COMMIT}`;
-    assert.equal(parseServerRoot(`${root}/node ${root}/out/server-main.js --host=127.0.0.1 --port=0 `), root);
+    assert.equal(parseServerRoot(serverArgv(root, '--host=127.0.0.1', '--port=0')), root);
   });
-  test('no server-main token → undefined', () => {
-    assert.equal(parseServerRoot('/usr/bin/node foo.js'), undefined);
-    assert.equal(parseServerRoot('/usr/bin/node /x/out/server-main.jsx'), undefined);
-    assert.equal(parseServerRoot('node /out/server-main.js'), undefined);
+  test('a home path containing spaces is kept intact', () => {
+    const root = `/home/John Doe/.vscodium-server/bin/${COMMIT}`;
+    assert.equal(parseServerRoot(serverArgv(root, '--start-server')), root);
+  });
+  test('no server-main argument → undefined', () => {
+    assert.equal(parseServerRoot(['/usr/bin/node', 'foo.js']), undefined);
+    assert.equal(parseServerRoot(['/usr/bin/node', '/x/out/server-main.jsx']), undefined);
+    assert.equal(parseServerRoot(['node', '/out/server-main.js']), undefined);
   });
 });
 
@@ -103,11 +109,11 @@ describe('readServerCommit', () => {
   });
 });
 
-describe('readCmdline / listChildren', () => {
-  test('readCmdline replaces \\0 with spaces', () => {
-    const cl = readCmdline(process.pid);
-    assert.ok(!cl.includes('\0'));
-    assert.ok(cl.includes('node'));
+describe('readArgv / listChildren', () => {
+  test('readArgv splits /proc/<pid>/cmdline on \\0', () => {
+    const argv = readArgv(process.pid);
+    assert.ok(argv.length > 0 && argv.every((a) => a !== '' && !a.includes('\0')));
+    assert.ok(argv[0].includes('node'));
   });
   test('lists the sleep child started by this test', async () => {
     const child = spawn('sleep', ['30'], { stdio: 'ignore' });
@@ -119,6 +125,60 @@ describe('readCmdline / listChildren', () => {
     } finally {
       child.kill(); // The only allowed process operation: ending the sleep this test started itself
     }
+  });
+});
+
+describe('verifyServer', () => {
+  const WRAPPER = 4242;
+  // Builds <home>/<dataDir>/bin/<dirName> with product.json and optionally the pid file; returns the server root
+  const makeServer = (dataDir: string, dirName: string, pid: string | undefined, commit = COMMIT): string => {
+    assertTempHome(tmp.home);
+    const root = path.join(tmp.home, dataDir, 'bin', dirName);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'product.json'), JSON.stringify({ commit }));
+    const pidFile = path.join(tmp.home, dataDir, `.${commit}.pid`);
+    if (pid === undefined) fs.rmSync(pidFile, { force: true });
+    else fs.writeFileSync(pidFile, pid);
+    return root;
+  };
+  const unsupported = /^Parent process is not a WSL server that supports automatic restart/;
+
+  test('Antigravity (bin/<version>-<commit>) and VSCodium (bin/<commit>) pass and return the commit', () => {
+    const ag = makeServer('.antigravity-ide-server', `2.5.5-${COMMIT}`, `${WRAPPER}\n`);
+    assert.equal(verifyServer(serverArgv(ag, '--start-server'), WRAPPER, tmp.home), COMMIT);
+    const vc = makeServer('.vscodium-server', COMMIT, `${WRAPPER}\n`);
+    assert.equal(verifyServer(serverArgv(vc, '--start-server'), WRAPPER, tmp.home), COMMIT);
+  });
+  test('VS Code, unknown editors, missing --start-server or a non-bin layout are unsupported', () => {
+    const code = makeServer('.vscode-server', COMMIT, `${WRAPPER}`);
+    assert.throws(() => verifyServer(serverArgv(code, '--start-server'), WRAPPER, tmp.home), { message: unsupported });
+    const cursor = makeServer('.cursor-server', COMMIT, `${WRAPPER}`);
+    assert.throws(() => verifyServer(serverArgv(cursor, '--start-server'), WRAPPER, tmp.home), { message: unsupported });
+    const vc = makeServer('.vscodium-server', COMMIT, `${WRAPPER}`);
+    assert.throws(() => verifyServer(serverArgv(vc), WRAPPER, tmp.home), { message: unsupported });
+    const other = path.join(tmp.home, '.vscodium-server', 'other', COMMIT);
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, 'product.json'), JSON.stringify({ commit: COMMIT }));
+    assert.throws(() => verifyServer(serverArgv(other, '--start-server'), WRAPPER, tmp.home), { message: unsupported });
+    assert.throws(() => verifyServer(['/usr/bin/node', 'x.js', '--start-server'], WRAPPER, tmp.home), { message: unsupported });
+  });
+  test('a version dir that does not match the product.json commit is rejected', () => {
+    const root = makeServer('.vscodium-server', 'b'.repeat(40), `${WRAPPER}`);
+    assert.throws(() => verifyServer(serverArgv(root, '--start-server'), WRAPPER, tmp.home), {
+      message: 'Cannot read the server commit from product.json',
+    });
+  });
+  test('a missing or mismatching pid file is rejected', () => {
+    const root = makeServer('.vscodium-server', COMMIT, undefined);
+    assert.throws(() => verifyServer(serverArgv(root, '--start-server'), WRAPPER, tmp.home), { message: /^Failed to read pid file: .*\.vscodium-server/ });
+    makeServer('.vscodium-server', COMMIT, '1234');
+    assert.throws(() => verifyServer(serverArgv(root, '--start-server'), WRAPPER, tmp.home), {
+      message: 'The pid file does not match the server process',
+    });
+    makeServer('.vscodium-server', COMMIT, 'abc');
+    assert.throws(() => verifyServer(serverArgv(root, '--start-server'), WRAPPER, tmp.home), {
+      message: 'The pid file does not match the server process',
+    });
   });
 });
 

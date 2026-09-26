@@ -86,7 +86,7 @@ fi
 
 ## 5. Restarting the WSL-side server
 
-- Editor kind (whitelist, not generic parsing): the server root is the path before `/out/server-main.js` in `/proc/<ppid>/cmdline`, the data directory is `dirname(dirname(root))`, and it must be exactly one of these directories directly under `$HOME`:
+- Editor kind (whitelist, not generic parsing): the server root is the path before `/out/server-main.js` in the argv of `/proc/<ppid>/cmdline` (split on `\0`), its parent directory must be named `bin`, the data directory is the parent of that `bin`, and it must be exactly one of these directories directly under `$HOME`:
 
 | Data directory | Kind | Restart |
 |---|---|---|
@@ -113,7 +113,7 @@ fi
   - `unknown`: "Close all editor windows connected to this distro and reopen them after the editor's WSL server has exited."
 - Modal confirmation before switching:
   - automatic kinds: "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?"
-  - manual kinds: "The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?" (`{hint}` is the manual method above); after confirming and writing the state file, the warning "This editor's WSL server cannot be restarted automatically. {hint}" is shown.
+  - manual kinds: "The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?" (`{hint}` is the manual method above); after confirming, the state file is written and no further warning is shown.
 - "Restart WSL Server": automatic kinds show the modal "Restart {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?"; manual kinds show the warning "This editor's WSL server cannot be restarted automatically. {hint}" directly, without a modal.
 
 ## 6. Data model
@@ -160,7 +160,7 @@ Command titles below are the English entries of `package.nls.json`; the category
 2. Report an error and return when the target directory does not exist.
 3. Modal confirmation (text from section 5, depending on the editor kind).
 4. Write the state file atomically (empty for the default account).
-5. Restart the server as in section 5; for manual kinds, or when the checks fail, show the manual method.
+5. Automatic kinds: restart the server as in section 5; when the checks fail, show the manual method. Manual kinds: nothing more (the confirmation already showed the manual method).
 
 ### 8.2 Add
 
