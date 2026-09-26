@@ -343,7 +343,7 @@ export function moveEntry(src: string, dst: string): void {
     fs.symlinkSync(fs.readlinkSync(src), dst);
     fs.unlinkSync(src);
   } else if (st.isDirectory()) {
-    fs.cpSync(src, dst, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true, preserveTimestamps: true });
+    copyTree(src, dst, 'throw');
     fs.rmSync(src, { recursive: true });
   } else {
     fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
@@ -495,9 +495,31 @@ export function migrateClaudeToShared(dir: string, accountName: string, procRoot
   return report;
 }
 
-// Copies src to dst without following symlinks inside and without overwriting
-export function copyTree(src: string, dst: string): void {
-  fs.cpSync(src, dst, { recursive: true, errorOnExist: false, force: false, verbatimSymlinks: true });
+/** Recursive copy of the folder src to dst: links copied verbatim (never followed), files with their mode and
+ *  timestamps, sockets and FIFOs skipped. Nothing is overwritten: an entry that already exists at the target is
+ *  skipped ('skip') or fails with EEXIST ('throw'). Written without fs.cpSync, which aborts the whole process instead
+ *  of throwing when a directory cannot be read; here every problem surfaces as an ordinary error. */
+export function copyTree(src: string, dst: string, existing: 'skip' | 'throw' = 'skip'): void {
+  const st = fs.lstatSync(src);
+  const ds = lstatOrUndefined(dst);
+  if (st.isDirectory()) {
+    if (!ds) fs.mkdirSync(dst, { mode: st.mode & 0o777 });
+    else if (!ds.isDirectory() || existing === 'throw') return existsError(dst, existing);
+    for (const name of fs.readdirSync(src)) copyTree(path.join(src, name), path.join(dst, name), existing);
+    fs.utimesSync(dst, st.atime, st.mtime);
+  } else if (ds) {
+    existsError(dst, existing);
+  } else if (st.isSymbolicLink()) {
+    fs.symlinkSync(fs.readlinkSync(src), dst);
+  } else if (st.isFile()) {
+    fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(dst, st.mode & 0o777);
+    fs.utimesSync(dst, st.atime, st.mtime);
+  }
+}
+
+function existsError(dst: string, existing: 'skip' | 'throw'): void {
+  if (existing === 'throw') throw Object.assign(new Error(`EEXIST: file already exists, copy '${dst}'`), { code: 'EEXIST' });
 }
 
 /** Independent creation: copies settings.json (stripped), CLAUDE.md, the config folders and the non-excluded

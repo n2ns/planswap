@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { setLocale, t } from '../src/i18n';
 import { execFileSync } from 'node:child_process';
 import {
-  CLAUDE_SHARED_ENTRIES, claudeAccountBusy, copyClaudeIndependent, ensureClaudeLinks, isSharedClaudeAccount,
+  CLAUDE_SHARED_ENTRIES, claudeAccountBusy, copyClaudeIndependent, copyTree, ensureClaudeLinks, isSharedClaudeAccount, lstatOrUndefined,
   makeClaudeIndependent, mergeEntry, migrateClaudeToShared, mirrorClaudeJson, type MigrateReport,
 } from '../src/claudeShare';
 import { accountDir, deleteAccountDir } from '../src/paths';
@@ -476,6 +476,42 @@ describe('copyClaudeIndependent', () => {
 
     // Second run copies nothing new
     assert.deepEqual(copyClaudeIndependent(path.join(home, '.claude.json'), acc).copied, []);
+  });
+});
+
+describe('copyTree', () => {
+  test('copies links verbatim, keeps modes, skips fifos and existing entries; throws EEXIST on demand', () => {
+    const src = path.join(home, 'tree-src');
+    const dst = path.join(home, 'tree-dst');
+    write(path.join(src, 'a', 'f.txt'), 'f');
+    fs.chmodSync(path.join(src, 'a', 'f.txt'), 0o640);
+    fs.symlinkSync('/nowhere', path.join(src, 'lnk'));
+    execFileSync('mkfifo', [path.join(src, 'pipe')]);
+    write(path.join(dst, 'a', 'f.txt'), 'old');
+    copyTree(src, dst);
+    assert.equal(read(path.join(dst, 'a', 'f.txt')), 'old');   // never overwritten
+    assert.equal(fs.readlinkSync(path.join(dst, 'lnk')), '/nowhere');
+    assert.ok(!fs.existsSync(path.join(dst, 'pipe')));
+    fs.rmSync(path.join(dst, 'a', 'f.txt'));
+    copyTree(src, dst);
+    assert.equal(read(path.join(dst, 'a', 'f.txt')), 'f');
+    assert.equal(mode(path.join(dst, 'a', 'f.txt')), '640');
+    assert.throws(() => copyTree(src, dst, 'throw'), { code: 'EEXIST' });
+  });
+
+  test('an unreadable folder throws an ordinary error instead of ending the process', () => {
+    if (process.getuid?.() === 0) return;   // root ignores directory permissions
+    const src = path.join(home, 'tree-src');
+    write(path.join(src, 'ok.txt'), 'ok');
+    write(path.join(src, 'locked', 'f.txt'), 'f');
+    fs.chmodSync(path.join(src, 'locked'), 0o000);
+    const dst = path.join(home, 'tree-dst');
+    try {
+      assert.throws(() => copyTree(src, dst), /EACCES/);
+    } finally {
+      // The target folder was created with the source's mode before the read failed
+      for (const d of [path.join(src, 'locked'), path.join(dst, 'locked')]) if (lstatOrUndefined(d)) fs.chmodSync(d, 0o700);
+    }
   });
 });
 
