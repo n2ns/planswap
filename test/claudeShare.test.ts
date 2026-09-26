@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
+import { execFileSync } from 'node:child_process';
 import {
   CLAUDE_SHARED_ENTRIES, claudeAccountBusy, copyClaudeIndependent, ensureClaudeLinks, isSharedClaudeAccount,
-  migrateClaudeToShared, mirrorClaudeJson,
+  mergeEntry, migrateClaudeToShared, mirrorClaudeJson, type MigrateReport,
 } from '../src/claudeShare';
 import { accountDir, deleteAccountDir } from '../src/paths';
 import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
@@ -303,7 +304,36 @@ describe('claudeAccountBusy', () => {
   });
 });
 
+describe('mergeEntry', () => {
+  test('a fifo the default lacks is left in place instead of being moved', () => {
+    const src = path.join(home, 'merge-src');
+    const dst = path.join(home, 'merge-dst');
+    fs.mkdirSync(src);
+    fs.mkdirSync(dst);
+    execFileSync('mkfifo', [path.join(src, 'pipe')]);
+    const report: MigrateReport = { linked: [], created: [], conflicts: [], refused: [], moved: 0, duplicates: 0, keptBoth: [], backups: [] };
+    mergeEntry(path.join(src, 'pipe'), path.join(dst, 'pipe'), 'pipe', { report, account: 'x' });
+    assert.ok(fs.lstatSync(path.join(src, 'pipe')).isFIFO());
+    assert.ok(!fs.existsSync(path.join(dst, 'pipe')));
+    assert.equal(report.moved, 0);
+    assert.deepEqual(report.keptBoth, []);
+  });
+});
+
 describe('migrateClaudeToShared', () => {
+  test('a dangling link in the default dir does not abort the migration; the account file is backed up', () => {
+    fs.symlinkSync('/nowhere', path.join(def, 'CLAUDE.md'));
+    const acc = accountDir('dangling');
+    write(path.join(acc, 'CLAUDE.md'), 'acc rules');
+    write(path.join(acc, 'projects', 'p', 'a.jsonl'), 'a');
+    const r = migrateClaudeToShared(acc, 'dangling', fakeProc({}));
+    assert.deepEqual(r.backups, ['CLAUDE.md.independent-backup']);
+    assert.equal(read(path.join(acc, 'CLAUDE.md.independent-backup')), 'acc rules');
+    assert.equal(fs.readlinkSync(path.join(def, 'CLAUDE.md')), '/nowhere');   // the default entry is never touched
+    assert.equal(read(path.join(def, 'projects', 'p', 'a.jsonl')), 'a');
+    assert.ok(isSharedClaudeAccount(acc));
+  });
+
   test('a settings.json / CLAUDE.md the default lacks is moved into the default instead of being backed up', () => {
     const acc = accountDir('solo');
     write(path.join(acc, 'settings.json'), '{"model":"a"}');

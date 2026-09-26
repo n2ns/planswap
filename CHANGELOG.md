@@ -23,6 +23,9 @@
 - An account whose directory was deleted or renamed outside the extension no longer stays in the list as a "Not logged in" row: it is removed, together with its alias, at startup and on refresh (Claude and Codex).
 - Account names and aliases are checked for duplicates case-insensitively: `Work` can no longer be added or used as an alias next to `work`, and auto-discovery no longer registers `~/.claude-work` / `~/.codex-work` as a second account when `Work` exists.
 - Claude: switching to an account whose directory does not exist is refused with an error, as it already was for Codex.
+- Claude: sharing an independent account no longer aborts halfway when `~/.claude` has a dangling link such as `CLAUDE.md` or `settings.json`; the account's file is kept as `<file>.independent-backup`.
+- Sharing an independent account leaves sockets and FIFOs inside shared folders in place instead of trying to move them into the default directory.
+- The share confirmation now says where differing files end up: `.from-<name>` next to the default file inside shared folders, `<file>.independent-backup` in the account directory for top-level files (and, for Codex, the thread databases).
 
 ## [0.1.2] - 2026-09-26
 

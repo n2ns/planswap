@@ -372,6 +372,7 @@ export interface MergeCtx { report: MigrateReport; account: string }
 export function mergeEntry(src: string, dst: string, rel: string, ctx: MergeCtx): void {
   const ss = fs.lstatSync(src);
   const ds = lstatOrUndefined(dst);
+  if (!ss.isDirectory() && !ss.isFile() && !ss.isSymbolicLink()) return;   // sockets, fifos: left in place
   if (ss.isDirectory()) {
     if (!ds) fs.mkdirSync(dst, { mode: ss.mode & 0o777 });
     if (!ds || ds.isDirectory()) {
@@ -388,7 +389,6 @@ export function mergeEntry(src: string, dst: string, rel: string, ctx: MergeCtx)
     ctx.report.duplicates++;
     return;
   }
-  if (!ss.isDirectory() && !ss.isFile() && !ss.isSymbolicLink()) return;   // sockets, fifos: left in place
   const kept = freeName(`${dst}.from-${ctx.account}`);
   moveEntry(src, kept);
   ctx.report.keptBoth.push(path.join(path.dirname(rel), path.basename(kept)));
@@ -460,7 +460,7 @@ export function migrateClaudeToShared(dir: string, accountName: string, procRoot
           if (name === 'settings.json' && !settingsShareable(src)) continue;
           moveEntry(src, dst);
           report.moved++;
-        } else if (sameContent(src, dst, st, fs.statSync(dst))) {
+        } else if (fs.existsSync(dst) && sameContent(src, dst, st, fs.statSync(dst))) {
           fs.unlinkSync(src);
           report.duplicates++;
         } else {
