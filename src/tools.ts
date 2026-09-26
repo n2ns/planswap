@@ -24,6 +24,12 @@ const errText = (err: unknown): string => (err instanceof Error ? err.message : 
 /** Tool entry shared by the panel toolbar and the Command Palette */
 export async function runTool(mode: PanelMode, tool: ToolId, deps: ToolDeps): Promise<void> {
   switch (tool) {
+    case 'openHelp':
+      await vscode.env.openExternal(vscode.Uri.parse('https://github.com/n2ns/planswap#readme'));
+      return;
+    case 'openStar':
+      await vscode.env.openExternal(vscode.Uri.parse('https://github.com/n2ns/planswap'));
+      return;
     case 'openGlobalMd':
       await openGlobalMd(mode);
       return;
@@ -50,6 +56,13 @@ export async function runTool(mode: PanelMode, tool: ToolId, deps: ToolDeps): Pr
     case 'syncRules':
       syncRules(mode, deps);
       return;
+    case 'updateCli': {
+      const vendor = mode === 'claude' ? 'Claude' : 'Codex';
+      const terminal = vscode.window.createTerminal({ name: t('tools.updateCli', { vendor }) });
+      terminal.sendText(mode === 'claude' ? 'claude update' : 'env -u CODEX_HOME codex update');
+      terminal.show();
+      return;
+    }
   }
 }
 

@@ -1,7 +1,8 @@
 import * as esbuild from 'esbuild';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 
 const watch = process.argv.includes('--watch');
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 // Ship the codicon font with the extension (node_modules is not included in the vsix)
 mkdirSync('dist/media', { recursive: true });
@@ -29,6 +30,7 @@ const contexts = await Promise.all([
     bundle: true,
     format: 'iife',
     platform: 'browser',
+    define: { __PLANSWAP_VERSION__: JSON.stringify(version) },
     target: 'es2022',
     minify: !watch,
     sourcemap: watch,

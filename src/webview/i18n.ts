@@ -68,11 +68,16 @@ export const en = {
   'tools.settings': 'Settings',
   'tools.syncRules': 'Sync rules',
   'tools.syncRulesTitle': "Link the default account's global rules to other accounts",
+  'tools.updateCli': 'Update CLI',
+  'tools.updateCliTitle': 'Update CLI in a terminal',
 
   'footer.versions': 'Show CLI and extension versions',
   'common.reloadWindow': 'Reload Window',
   'footer.restartExtHost': 'Restart Extension Host',
   'footer.restartServer': 'Restart WSL Server',
+  'footer.help': 'User guide',
+  'footer.star': 'Star',
+  'footer.version': 'v{version}',
 
   'versions.title': 'CLI and extension versions',
   'versions.close': 'Close',
@@ -144,11 +149,16 @@ export const zhCn: Record<MessageKey, string> = {
   'tools.settings': '插件设置',
   'tools.syncRules': '同步规则',
   'tools.syncRulesTitle': '把默认账号的全局规则链接到其他账号',
+  'tools.updateCli': '更新CLI',
+  'tools.updateCliTitle': '在终端中更新 CLI',
 
   'footer.versions': '显示 CLI 与插件版本',
   'common.reloadWindow': '重新加载窗口',
   'footer.restartExtHost': '重启扩展宿主',
   'footer.restartServer': '重启 WSL 服务端',
+  'footer.help': '使用说明',
+  'footer.star': 'Star',
+  'footer.version': 'v{version}',
 
   'versions.title': 'CLI 与插件版本',
   'versions.close': '关闭',

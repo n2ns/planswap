@@ -6,6 +6,8 @@ import '@vscode-elements/elements/dist/vscode-icon/index.js';
 import type { AccountView, FromWebview, PanelMode, PanelState, TabState, ToolId, ToWebview } from '../protocol';
 import { getLocale, setLocale, t, type MessageKey } from './i18n';
 
+declare const __PLANSWAP_VERSION__: string;
+
 interface WebviewState {
   tab?: PanelMode;
 }
@@ -499,7 +501,7 @@ class Page {
     return row;
   }
 
-  // Page tools: open global CLAUDE.md / AGENTS.md, open extension settings, sync rules (shown even when Codex is not enabled)
+  // Page tools, including CLI updates (shown even when Codex is not enabled)
   private renderTools(): HTMLElement {
     const btn = (icon: string, label: string, title: string, tool: ToolId): HTMLElement =>
       onClick(h('vscode-button', { secondary: true, icon, title }, label), () => this.send({ type: 'tool', tool }));
@@ -513,6 +515,7 @@ class Page {
         btn('symbol-ruler', this.text.mdLabel, t(`${this.mode}.mdTitle`), 'openGlobalMd'),
         btn('settings-gear', t('tools.settings'), t(`${this.mode}.settingsTitle`), 'openSettings'),
         btn('link', t('tools.syncRules'), t('tools.syncRulesTitle'), 'syncRules'),
+        btn('cloud-download', t('tools.updateCli'), t('tools.updateCliTitle'), 'updateCli'),
       ),
     );
   }
@@ -588,10 +591,14 @@ const FOOTER_TOOLS = [
   ['refresh', 'common.reloadWindow', 'reloadWindow'],
   ['debug-restart', 'footer.restartExtHost', 'restartExtHost'],
   ['server-process', 'footer.restartServer', 'restartServer'],
+  ['book', 'footer.help', 'openHelp'],
+  ['star-empty', 'footer.star', 'openStar'],
 ] as const satisfies ReadonlyArray<readonly [icon: string, title: MessageKey, tool: ToolId]>;
 const footer = h('div', { class: 'tools', role: 'toolbar' });
+const footerVersion = h('div', { class: 'extension-version' });
 function renderFooter(): void {
   footer.setAttribute('aria-label', t('tools.title'));
+  footerVersion.textContent = t('footer.version', { version: __PLANSWAP_VERSION__ });
   footer.replaceChildren(
     ...FOOTER_TOOLS.map(([icon, title, tool]) => toolbarButton(icon, t(title), () => send({ type: 'tool', mode: activeTab ?? state.active, tool }))),
   );
@@ -627,7 +634,7 @@ function renderVersions(): void {
     ),
   );
 }
-app.after(versionsCard, footer);
+app.after(versionsCard, footer, footerVersion);
 
 // Re-translates everything built once; render() rebuilds the rest
 function applyLocale(): void {

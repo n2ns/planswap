@@ -135,6 +135,7 @@ export const en = {
   'del.daemonAlive': "This account's codex daemon is still running; refusing to delete: {dir}",
 
   // tools.ts
+  'tools.updateCli': 'Update {vendor} CLI',
   'tools.codexNotInit': 'The Codex part is not initialized; cannot restart the WSL server.',
   'tools.syncNotInit': 'The {vendor} part is not initialized; cannot sync rules.',
   'tools.sync.linked': 'Linked {count} account(s)',
@@ -276,6 +277,7 @@ export const zhCn: Record<MessageKey, string> = {
   'del.notDir': '路径不是目录：{dir}',
   'del.daemonAlive': '该账号的 codex 守护进程仍在运行，拒绝删除：{dir}',
 
+  'tools.updateCli': '更新 {vendor} CLI',
   'tools.codexNotInit': 'Codex 部分未初始化，无法重启 WSL 服务端。',
   'tools.syncNotInit': '{vendor} 部分未初始化，无法同步规则。',
   'tools.sync.linked': '已链接 {count} 个账号',

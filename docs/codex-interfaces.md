@@ -113,7 +113,7 @@ When the top tab bar switches to Codex, the page is rendered from `state.codex`,
 - No reload banner; when `pendingDir` is set, the top shows "X selected; takes effect after restarting the server" with a "Restart server" button (sends `{type:'restartServer', mode:'codex'}`); the add section's help text uses `~/.codex-<name>`; the sign-in button's title is "Run codex login in a terminal"; the terminal icon's title is "Run codex with this account in a terminal"; the signed-out hint is `Click "Log in" to log in from a terminal, or switch and log in from the Codex panel`.
 - Current and other rows: email and `plan` when there is an `email`; "Logged in" when `loggedIn` without `email`; "Not logged in" when signed out.
 - Pencil renaming of all non-external rows works as on the Claude page (`rename` with `dir`, `label`, edit state keyed by `dir`), with messages carrying `mode:'codex'`.
-- The "Tools" row shows `AGENTS.md`, the Codex extension settings and "Sync rules" (`tool` messages with `mode:'codex'`).
+- The "Tools" row shows `AGENTS.md`, the Codex extension settings, "Sync rules" and "Update CLI" (`tool` messages with `mode:'codex'`; updating sends `tool:'updateCli'`).
 - Claude page behavior is unchanged.
 
 ## src/codex/codexCommands.ts (imports vscode)

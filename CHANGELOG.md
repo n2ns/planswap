@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Update CLI** in both tabs' Tools rows: runs `claude update` or `env -u CODEX_HOME codex update` in a visible terminal. The Codex command supports updating a default-home standalone installation after switching accounts.
+- **User guide** and **Star** footer buttons that open the GitHub README and repository.
+- A separate small version line below the footer buttons, populated from the extension manifest at build time.
+
 ## [0.1.2] - 2026-09-26
 
 ### Fixed

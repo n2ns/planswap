@@ -138,7 +138,7 @@ fi
   - The "Log in" button of signed-out accounts runs `env CODEX_HOME='<dir>' codex login` in a terminal; alternatively switch and sign in directly in the Codex panel (the directory is empty, so no account is revoked).
   - The terminal icon of signed-in accounts runs `env CODEX_HOME='<dir>' codex`.
   - The current account cannot be removed.
-  - The "Tools" row has `AGENTS.md` (opens `<effectiveDir()>/AGENTS.md`), the Codex extension settings (`chatgpt.`) and "Sync rules" (links `AGENTS.md` of the default account into the other Codex accounts).
+  - The "Tools" row has `AGENTS.md` (opens `<effectiveDir()>/AGENTS.md`), the Codex extension settings (`chatgpt.`), "Sync rules" (links `AGENTS.md` of the default account into the other Codex accounts), and "Update CLI" (opens a terminal and runs `env -u CODEX_HOME codex update`; see features.md section 5.5).
 
 ## 8. Commands and flows
 

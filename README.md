@@ -23,7 +23,7 @@ Switch between the Claude Code and Codex subscription accounts you own (Claude P
 - **One-click switching**: each account lives in its own config directory, so its sign-in, settings and history stay intact.
 - **Shared global rules**: `CLAUDE.md` / `AGENTS.md` are symlinked from the default account, so there is only one copy to maintain.
 - **Display names**: rename any account (only the label changes, never the directory).
-- **Handy tools**: open the global rules file or extension settings, show CLI and extension versions, reload the window, restart the extension host or the WSL server.
+- **Handy tools**: open the global rules file or extension settings, update either CLI in a terminal, show CLI and extension versions, reload the window, restart the extension host or the WSL server.
 - **English and Simplified Chinese UI**, switchable in the settings.
 
 ## Requirements
@@ -69,6 +69,19 @@ Open **AI Account Switcher** in the activity bar.
 2. Add an account and sign in the same way as for Claude.
 3. Switch to it. Because Codex reads its account only at startup, the switch takes effect only after the editor's **WSL server restarts**. In Antigravity and VSCodium, PlanSwap restarts it for you: every WSL window disconnects and needs one **Reload Window** click, and integrated terminals close. In VS Code you close and reopen the windows yourself (see [Supported editors](#supported-editors)).
 
+## Tools
+
+Both tabs have an **Update CLI** button (**更新CLI** in Chinese) in the Tools row. Clicking it opens a terminal and runs:
+
+| Tab | Command |
+|---|---|
+| Claude | `claude update` |
+| Codex | `env -u CODEX_HOME codex update` |
+
+Follow the update progress and any prompts in that terminal. The Codex command clears `CODEX_HOME` for the update process so a standalone installation under the default `~/.codex` can find its installation metadata after an account switch. It does not change the selected account or the editor's environment. Installations under a custom home may require their original installation method instead.
+
+The shared footer provides version information, window reload, extension-host restart and WSL-server restart, followed by **User guide** (**使用说明**) and **Star**. These last two buttons open the [GitHub README](https://github.com/n2ns/planswap#readme) and [repository](https://github.com/n2ns/planswap), respectively; starring is done on GitHub. A separate small line below the buttons shows the installed PlanSwap version.
+
 ## Language
 
 Set `aiSwitcher.language` to `auto` (default, follows VS Code), `en` or `zh-cn`. The panel, status bar and messages switch immediately. Command titles and the view name follow VS Code's display language (a VS Code limitation).
@@ -90,7 +103,7 @@ Account management runs locally in your WSL environment. PlanSwap includes no te
 - **Local changes**: account switching updates the Claude extension setting or the Codex selection file. Enabling Codex switching adds marker blocks to `~/.profile` and `~/.bashrc` after confirmation. New account directories can receive starter settings and links to shared global rules.
 - **Data removal**: removing an account from the list does not delete its files unless you separately confirm directory deletion. That deletion permanently removes the directory's credentials, sessions, and other local data.
 
-Sign-in and AI requests are handled by the official Claude Code and Codex clients, including when launched from PlanSwap. Those clients have their own network behavior and privacy policies; this statement covers PlanSwap itself.
+Sign-in, CLI updates and AI requests are handled by the official Claude Code and Codex clients, including when launched from PlanSwap. Those clients have their own network behavior and privacy policies; this statement covers PlanSwap itself. The User guide and Star buttons open GitHub in your browser.
 
 ## Uninstall
 

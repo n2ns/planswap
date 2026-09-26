@@ -518,6 +518,16 @@ body {
   background: var(--surface-1);
 }
 .tools .icon-btn { flex: none; color: var(--muted); }
+.extension-version {
+  flex: none;
+  min-width: 0;
+  padding: 0 8px 6px;
+  color: var(--muted);
+  background: var(--surface-1);
+  font-size: 11px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
 /* Versions card: sits right above the footer toolbar */
 .versions { flex: none; min-width: 0; padding: 8px 12px 8px; border-top: 1px solid var(--line); background: var(--surface-1); }
 .versions[hidden] { display: none; }

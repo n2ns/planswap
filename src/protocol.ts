@@ -3,7 +3,7 @@ import type { Locale } from './i18n';
 
 export type AccountKind = 'default' | 'named' | 'external';
 export type PanelMode = 'claude' | 'codex';
-export type ToolId = 'openGlobalMd' | 'openSettings' | 'reloadWindow' | 'restartExtHost' | 'restartServer' | 'cliVersions' | 'syncRules';
+export type ToolId = 'openGlobalMd' | 'openSettings' | 'reloadWindow' | 'restartExtHost' | 'restartServer' | 'cliVersions' | 'syncRules' | 'updateCli' | 'openHelp' | 'openStar';
 
 export interface AccountView {
   kind: AccountKind;
