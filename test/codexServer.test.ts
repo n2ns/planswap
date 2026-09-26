@@ -1,10 +1,14 @@
-// Only tests the pure parsers, listChildren and the throwing paths of planRestart; never calls executeRestart and never signals any process not started by this test
+// Only tests the pure parsers, classification, readServerCommit, listChildren and the throwing paths of planRestart; never calls executeRestart and never signals any process not started by this test
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
-import { listChildren, parseCommitFromCmdline, parseStatParentPid, planRestart, readCmdline } from '../src/codex/codexServer';
+import {
+  canAutoRestart, classifyDataDir, detectServerKind, listChildren, parseServerRoot, parseStatParentPid, planRestart,
+  readCmdline, readServerCommit,
+} from '../src/codex/codexServer';
 import { assertTempHome, makeTempHome, type TempHome } from './helpers';
 
 let tmp: TempHome;
@@ -28,14 +32,74 @@ describe('parseStatParentPid', () => {
   });
 });
 
-describe('parseCommitFromCmdline', () => {
-  test('parses the 40-hex commit from bin/<version>-<commit>/', () => {
-    const cmd = '/home/u/.antigravity-ide-server/bin/2.5.5-ecfbad74d93962fc8ca485d93ab9b4f3d4cb6cf8/node /home/u/.antigravity-ide-server/bin/2.5.5-ecfbad74d93962fc8ca485d93ab9b4f3d4cb6cf8/out/server-main.js --start-server';
-    assert.equal(parseCommitFromCmdline(cmd), 'ecfbad74d93962fc8ca485d93ab9b4f3d4cb6cf8');
+const COMMIT = 'ecfbad74d93962fc8ca485d93ab9b4f3d4cb6cf8';
+
+describe('parseServerRoot', () => {
+  test('Antigravity: bin/<version>-<commit>', () => {
+    const root = `/home/u/.antigravity-ide-server/bin/2.5.5-${COMMIT}`;
+    assert.equal(parseServerRoot(`${root}/node ${root}/out/server-main.js --start-server --host=127.0.0.1 `), root);
   });
-  test('no match / too short → undefined', () => {
-    assert.equal(parseCommitFromCmdline('/usr/bin/node foo.js'), undefined);
-    assert.equal(parseCommitFromCmdline('/x/bin/1.0-abcdef/out/server-main.js'), undefined);
+  test('VSCodium: bin/<commit>', () => {
+    const root = `/home/u/.vscodium-server/bin/${COMMIT}`;
+    assert.equal(parseServerRoot(`${root}/node ${root}/out/server-main.js --start-server --enable-remote-auto-shutdown `), root);
+  });
+  test('VS Code: bin/<commit>', () => {
+    const root = `/home/u/.vscode-server/bin/${COMMIT}`;
+    assert.equal(parseServerRoot(`${root}/node ${root}/out/server-main.js --host=127.0.0.1 --port=0 `), root);
+  });
+  test('no server-main token → undefined', () => {
+    assert.equal(parseServerRoot('/usr/bin/node foo.js'), undefined);
+    assert.equal(parseServerRoot('/usr/bin/node /x/out/server-main.jsx'), undefined);
+    assert.equal(parseServerRoot('node /out/server-main.js'), undefined);
+  });
+});
+
+describe('classifyDataDir', () => {
+  const home = '/home/u';
+  test('maps every whitelisted name directly under home', () => {
+    assert.equal(classifyDataDir('/home/u/.antigravity-ide-server', home), 'antigravity');
+    assert.equal(classifyDataDir('/home/u/.vscodium-server', home), 'vscodium');
+    assert.equal(classifyDataDir('/home/u/.vscode-server', home), 'vscode');
+    assert.equal(classifyDataDir('/home/u/.vscode-server-insiders', home), 'vscode');
+  });
+  test('unknown name, nested path or a different home → unknown', () => {
+    assert.equal(classifyDataDir('/home/u/.cursor-server', home), 'unknown');
+    assert.equal(classifyDataDir('/home/u/x/.vscodium-server', home), 'unknown');
+    assert.equal(classifyDataDir('/home/v/.antigravity-ide-server', home), 'unknown');
+    assert.equal(classifyDataDir('/home/u/constructor', home), 'unknown');
+  });
+});
+
+describe('canAutoRestart / detectServerKind', () => {
+  test('only antigravity and vscodium restart automatically', () => {
+    assert.equal(canAutoRestart('antigravity'), true);
+    assert.equal(canAutoRestart('vscodium'), true);
+    assert.equal(canAutoRestart('vscode'), false);
+    assert.equal(canAutoRestart('unknown'), false);
+  });
+  test('the test runner is not a WSL server → unknown', () => {
+    assert.equal(detectServerKind(), 'unknown');
+  });
+});
+
+describe('readServerCommit', () => {
+  const writeProduct = (name: string, content: string): string => {
+    assertTempHome(tmp.home);
+    const root = path.join(tmp.home, name);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'product.json'), content);
+    return root;
+  };
+  test('reads the top-level commit', () => {
+    assert.equal(readServerCommit(writeProduct('valid', JSON.stringify({ nameShort: 'x', commit: COMMIT }))), COMMIT);
+  });
+  test('missing product.json, invalid JSON or a bad commit throws a localized error', () => {
+    const noCommit = { message: 'Cannot read the server commit from product.json' };
+    assert.throws(() => readServerCommit(path.join(tmp.home, 'missing')), noCommit);
+    assert.throws(() => readServerCommit(writeProduct('invalid', '{')), noCommit);
+    assert.throws(() => readServerCommit(writeProduct('nocommit', JSON.stringify({ nameShort: 'x' }))), noCommit);
+    assert.throws(() => readServerCommit(writeProduct('short', JSON.stringify({ commit: 'abcdef' }))), noCommit);
+    assert.throws(() => readServerCommit(writeProduct('upper', JSON.stringify({ commit: COMMIT.toUpperCase() }))), noCommit);
   });
 });
 
@@ -63,7 +127,7 @@ describe('planRestart', () => {
     assertTempHome(tmp.home);
     assert.throws(
       () => planRestart(),
-      (e: unknown) => e instanceof Error && /^(Cannot find the WSL server process|Parent process is not Antigravity's WSL server|Cannot parse the commit from the server command line|Failed to read pid file|The pid file does not match the server process)/.test(e.message),
+      (e: unknown) => e instanceof Error && /^(Cannot find the WSL server process|Parent process is not a WSL server that supports automatic restart|Cannot read the server commit from product.json|Failed to read pid file|The pid file does not match the server process)/.test(e.message),
     );
   });
 });
@@ -75,7 +139,7 @@ describe('codexServer in zh-cn', () => {
     assert.throws(() => parseStatParentPid('garbage'), { message: 'stat 格式无法解析' });
     assert.throws(
       () => planRestart(),
-      (e: unknown) => e instanceof Error && /^(找不到 WSL 服务端进程|父进程不是 Antigravity 的 WSL 服务端|无法从服务端命令行解析 commit|读取 pid 文件失败|pid 文件与服务端进程不匹配)/.test(e.message),
+      (e: unknown) => e instanceof Error && /^(找不到 WSL 服务端进程|父进程不是支持自动重启的 WSL 服务端|无法从 product.json 读取服务端 commit|读取 pid 文件失败|pid 文件与服务端进程不匹配)/.test(e.message),
     );
   });
 });

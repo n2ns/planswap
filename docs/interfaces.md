@@ -282,7 +282,7 @@ Shared tools live in the footer toolbar pinned to the bottom of the panel, tab-s
 
 ```ts
 export interface ToolDeps {
-  codexRestart?: () => Promise<void>;   // provided by codexCommands.restartServerInteractive (modal confirmation + planRestart checks); undefined when Codex is not initialized
+  codexRestart?: () => Promise<void>;   // provided by codexCommands.restartServerInteractive (modal confirmation + planRestart checks for Antigravity / VSCodium; manual-restart warning only for VS Code / unknown editors); undefined when Codex is not initialized
   postVersions?: (items: Array<{ label: string; value: string }>) => void; // panel entry: pushes the version info to the sidebar; the Command Palette entry passes undefined and uses a QuickPick instead
   claudeDirs?: () => string[];          // directories of store.named() on the Claude side (for syncRules)
   codexDirs?: () => string[];           // directories of store.named() on the Codex side; undefined when not initialized

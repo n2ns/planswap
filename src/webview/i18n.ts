@@ -53,11 +53,11 @@ export const en = {
 
   'disabled.title': 'Codex account switching is not enabled',
   'disabled.text':
-    'When enabled, each account uses its own CODEX_HOME directory (default ~/.codex, others ~/.codex-<name>). The extension writes a marker block into ~/.profile and ~/.bashrc that reads the selected directory from a state file. Switching accounts requires restarting the Antigravity WSL server; all WSL windows disconnect and prompt to reload.',
+    "When enabled, each account uses its own CODEX_HOME directory (default ~/.codex, others ~/.codex-<name>). The extension writes a marker block into ~/.profile and ~/.bashrc that reads the selected directory from a state file. Switching accounts requires restarting the editor's WSL server; all WSL windows disconnect.",
   'disabled.enable': 'Enable Codex switching',
 
   'pending.title': '{name} selected; takes effect after restarting the server',
-  'pending.text': 'Restarting disconnects all WSL windows and prompts them to reload; integrated terminals close.',
+  'pending.text': 'Restarting the server disconnects all WSL windows; integrated terminals close.',
   'pending.restart': 'Restart server',
 
   'banner.title': 'Switched to {name}',
@@ -129,11 +129,11 @@ export const zhCn: Record<MessageKey, string> = {
 
   'disabled.title': 'Codex 账号切换尚未启用',
   'disabled.text':
-    '启用后，每个账号使用独立的 CODEX_HOME 目录（默认 ~/.codex，其他为 ~/.codex-<名字>）。插件会在 ~/.profile 与 ~/.bashrc 写入一段标记块，从状态文件读取所选目录。切换账号需要重启 Antigravity 的 WSL 服务端，所有 WSL 窗口会断开并提示重新加载。',
+    '启用后，每个账号使用独立的 CODEX_HOME 目录（默认 ~/.codex，其他为 ~/.codex-<名字>）。插件会在 ~/.profile 与 ~/.bashrc 写入一段标记块，从状态文件读取所选目录。切换账号需要重启编辑器的 WSL 服务端，所有 WSL 窗口会断开。',
   'disabled.enable': '启用 Codex 切换',
 
   'pending.title': '已选择 {name}，重启服务端后生效',
-  'pending.text': '重启会断开所有 WSL 窗口并提示重新加载，集成终端关闭。',
+  'pending.text': '重启服务端会断开所有 WSL 窗口，集成终端关闭。',
   'pending.restart': '重启服务端',
 
   'banner.title': '已切换到 {name}',

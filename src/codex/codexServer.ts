@@ -3,9 +3,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { t } from '../i18n';
 
+export type ServerKind = 'antigravity' | 'vscodium' | 'vscode' | 'unknown';
 export interface ServerPlan { serverPid: number; children: number[]; commit: string }
 
-const COMMIT_RE = /bin\/[^/\0]+-([0-9a-f]{40})\//;
+const SERVER_MAIN = '/out/server-main.js';
+const COMMIT_RE = /^[0-9a-f]{40}$/;
+// Whitelist of data dir names directly under $HOME
+const DATA_DIR_KINDS: Record<string, ServerKind> = {
+  '.antigravity-ide-server': 'antigravity',
+  '.vscodium-server': 'vscodium',
+  '.vscode-server': 'vscode',
+  '.vscode-server-insiders': 'vscode',
+};
 
 /** Parses field 4 (parent pid) of /proc/<pid>/stat. comm may contain spaces and parentheses, so split after the last ')'. */
 export function parseStatParentPid(statText: string): number {
@@ -18,9 +27,46 @@ export function parseStatParentPid(statText: string): number {
   return ppid;
 }
 
-/** Parses the 40-hex-digit commit from the bin/<version>-<commit>/ path segment in cmdline. */
-export function parseCommitFromCmdline(cmdline: string): string | undefined {
-  return COMMIT_RE.exec(cmdline)?.[1];
+/** Server root from a server-main cmdline: the first token ending with /out/server-main.js, with that suffix stripped. */
+export function parseServerRoot(cmdline: string): string | undefined {
+  const token = cmdline.split(/\s+/).find((s) => s.endsWith(SERVER_MAIN));
+  const root = token?.slice(0, -SERVER_MAIN.length);
+  return root ? root : undefined;
+}
+
+/** Whitelist mapping; dataDir must be exactly path.join(home, <name>). */
+export function classifyDataDir(dataDir: string, home: string): ServerKind {
+  const name = path.basename(dataDir);
+  if (!Object.hasOwn(DATA_DIR_KINDS, name) || path.resolve(dataDir) !== path.join(path.resolve(home), name)) return 'unknown';
+  return DATA_DIR_KINDS[name];
+}
+
+/** Classifies the server that hosts this process (process.ppid). Never throws; any failure → 'unknown'. */
+export function detectServerKind(): ServerKind {
+  try {
+    const root = parseServerRoot(readCmdline(process.ppid));
+    if (!root) return 'unknown';
+    return classifyDataDir(path.dirname(path.dirname(root)), os.homedir());
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** Only servers with a pid file and auto-shutdown can be restarted automatically. */
+export function canAutoRestart(kind: ServerKind): boolean {
+  return kind === 'antigravity' || kind === 'vscodium';
+}
+
+/** Reads the top-level commit of <root>/product.json; must be 40 lowercase hex digits. */
+export function readServerCommit(root: string): string {
+  let commit: unknown;
+  try {
+    commit = (JSON.parse(fs.readFileSync(path.join(root, 'product.json'), 'utf8')) as { commit?: unknown }).commit;
+  } catch {
+    throw new Error(t('server.noCommit'));
+  }
+  if (typeof commit !== 'string' || !COMMIT_RE.test(commit)) throw new Error(t('server.noCommit'));
+  return commit;
 }
 
 /** Reads /proc/<pid>/cmdline with \0 replaced by spaces. */
@@ -55,14 +101,19 @@ export function planRestart(): ServerPlan {
   if (ppid <= 1) throw new Error(t('server.notFound'));
 
   const cmdline = readCmdline(ppid);
-  if (!cmdline.includes('out/server-main.js') || !cmdline.includes('--start-server')) {
-    throw new Error(t('server.notAntigravity', { cmdline: cmdline.slice(0, 120) }));
+  const root = parseServerRoot(cmdline);
+  // Data dir layout: <home>/<dataDir>/bin/<version dir>
+  const dataDir = root ? path.dirname(path.dirname(root)) : '';
+  if (!cmdline.includes('out/server-main.js') || !cmdline.includes('--start-server')
+    || !root || !canAutoRestart(classifyDataDir(dataDir, os.homedir()))) {
+    throw new Error(t('server.unsupported', { cmdline: cmdline.slice(0, 120) }));
   }
 
-  const commit = parseCommitFromCmdline(cmdline);
-  if (!commit) throw new Error(t('server.noCommit'));
+  const commit = readServerCommit(root);
+  const dirName = path.basename(root);
+  if (dirName !== commit && !dirName.endsWith(`-${commit}`)) throw new Error(t('server.noCommit'));
 
-  const pidFile = path.join(os.homedir(), '.antigravity-ide-server', `.${commit}.pid`);
+  const pidFile = path.join(dataDir, `.${commit}.pid`);
   let pidText: string;
   try {
     pidText = fs.readFileSync(pidFile, 'utf8');

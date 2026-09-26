@@ -32,7 +32,7 @@ import {
   selfCheck,
   writeSelectedDir,
 } from './codexState';
-import { executeRestart, planRestart } from './codexServer';
+import { type ServerKind, canAutoRestart, detectServerKind, executeRestart, planRestart } from './codexServer';
 import type { CodexAccountStore } from './codexStore';
 import { runTool, type ToolDeps } from '../tools';
 import { t } from '../i18n';
@@ -79,19 +79,36 @@ function removeRcBlockFrom(file: string): void {
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-// Returns false when validation failed and the manual alternative was shown
+// Editor display name (not localized) for kinds that support automatic restart
+function editorName(kind: ServerKind): string {
+  return kind === 'vscodium' ? 'VSCodium' : 'Antigravity';
+}
+
+// Manual restart guidance for the given server kind
+function manualHint(kind: ServerKind): string {
+  if (kind === 'vscode') return t('codex.manualRestartHintVscode');
+  if (kind === 'unknown') return t('codex.manualRestartHintUnknown');
+  return t('codex.manualRestartHint', { editor: editorName(kind) });
+}
+
+// Returns false when automatic restart is unsupported or validation failed and the manual alternative was shown
 function restart(): boolean {
+  const kind = detectServerKind();
+  if (!canAutoRestart(kind)) {
+    void vscode.window.showWarningMessage(t('codex.manualRestartRequired', { hint: manualHint(kind) }));
+    return false;
+  }
   let plan;
   try {
     plan = planRestart();
   } catch (err) {
-    void vscode.window.showWarningMessage(t('codex.restartPlanFailed', { error: errText(err), hint: t('codex.manualRestartHint') }));
+    void vscode.window.showWarningMessage(t('codex.restartPlanFailed', { error: errText(err), hint: manualHint(kind) }));
     return false;
   }
   try {
     executeRestart(plan);
   } catch (err) {
-    void vscode.window.showWarningMessage(t('codex.restartFailed', { error: errText(err), hint: t('codex.manualRestartHint') }));
+    void vscode.window.showWarningMessage(t('codex.restartFailed', { error: errText(err), hint: manualHint(kind) }));
     return false;
   }
   return true;
@@ -99,8 +116,13 @@ function restart(): boolean {
 
 /** "Restart WSL server" with modal confirmation: shared by the panel button, Command Palette and toolbar */
 export async function restartServerInteractive(): Promise<void> {
+  const kind = detectServerKind();
+  if (!canAutoRestart(kind)) {
+    void vscode.window.showWarningMessage(t('codex.manualRestartRequired', { hint: manualHint(kind) }));
+    return;
+  }
   const continueLabel = t('common.continue');
-  const ok = await vscode.window.showWarningMessage(t('codex.restartConfirm'), { modal: true }, continueLabel);
+  const ok = await vscode.window.showWarningMessage(t('codex.restartConfirm', { editor: editorName(kind) }), { modal: true }, continueLabel);
   if (ok !== continueLabel) return;
   restart();
 }
@@ -262,8 +284,12 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
       void vscode.window.showErrorMessage(t('account.dirMissing', { dir: account.dir }));
       return;
     }
+    const kind = detectServerKind();
+    const confirmText = canAutoRestart(kind)
+      ? t('codex.switchConfirm', { editor: editorName(kind) })
+      : t('codex.switchConfirmManual', { hint: manualHint(kind) });
     const continueLabel = t('common.continue');
-    const ok = await vscode.window.showWarningMessage(t('codex.switchConfirm'), { modal: true }, continueLabel);
+    const ok = await vscode.window.showWarningMessage(confirmText, { modal: true }, continueLabel);
     if (ok !== continueLabel) return;
     try {
       writeSelectedDir(account.name === CODEX_DEFAULT_NAME ? undefined : account.dir);

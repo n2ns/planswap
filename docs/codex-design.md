@@ -1,14 +1,14 @@
 # Codex Account Switching: Design
 
 Date: 2026-09-26
-Status: implemented (v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `aiSwitcher.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
+Status: implemented (v7, 2026-09-26: the WSL server restart works per editor kind detected from a whitelist of server data directories: Antigravity and VSCodium restart automatically, VS Code and unrecognized editors only get manual instructions (section 5); v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `aiSwitcher.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
 
 ## 1. Goals and scope
 
 - Goal: add OpenAI Codex account switching to the same sidebar extension. After a switch, the official Codex editor extension, the codex processes it starts, and the codex CLI in integrated terminals all use the selected account, without signing in again.
 - Claude account switching is a separate feature; the two do not affect each other.
-- Runtime environment: WSL / Linux only, the editor is Antigravity IDE (VS Code 1.107 core), WSL remote window. The login shell is bash.
-- Cost accepted by the user: switching the Codex account requires restarting Antigravity's server inside WSL. All WSL windows disconnect and each shows "Cannot reconnect. Please reload the window." once; the user clicks "Reload Window" once in each window. Integrated terminals close.
+- Runtime environment: WSL / Linux only, the editor is Antigravity IDE (VS Code 1.107 core); VSCodium and VS Code are also recognized (section 5). WSL remote window. The login shell is bash.
+- Cost accepted by the user: switching the Codex account requires restarting the editor's server inside WSL (automatic only for Antigravity and VSCodium, see section 5). All WSL windows disconnect and each shows "Cannot reconnect. Please reload the window." once; the user clicks "Reload Window" once in each window. Integrated terminals close.
 - Non-goals:
   - `auth.json` is read-only, and only the JWT payload of its `tokens.id_token` is decoded (signature not verified) to display email and plan; no token is ever copied, swapped, cached or output (the raw `access_token`/`refresh_token`/`id_token` never reach logs, state, messages or the UI). `auth.json` is never written.
   - Never modify the contents of `~/.codex`, with one exception: when `AGENTS.md` is missing, an empty file is created as the target of the other account directories' symlinks.
@@ -29,6 +29,9 @@ Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.c
 8. Antigravity's WSL server: the startup script is re-run by the Windows-side extension on every window connection; the script uses the pid file plus the process name to decide whether the server is running, reuses it if so, and otherwise starts a new one with the login shell environment and overwrites the pid file. The pid file records the pid of the wrapper script `sh bin/antigravity-ide-server`; its child `node out/server-main.js` is the server, and the extension host's parent process is that node process. The server runs with `--enable-remote-auto-shutdown` and exits 300 seconds after the last window disconnects. There is exactly one server per distribution, user and version, shared by all WSL windows.
 9. The server's node process has no SIGTERM handler and exits on receipt. The extension host has a parent-process guard and exits by itself within about 1 second, and its children end with it. The pty host has no parent-process guard and lingers after the server dies, keeping integrated terminals and their processes alive, so it must be terminated as well.
 10. After the server dies, the startup script starts a new server when the client reconnects, but the new server does not accept the old reconnection token, and the client shows the dialog "Cannot reconnect. Please reload the window."; after clicking "Reload Window" it connects to the new server normally and the extension host environment is resolved again. Antigravity has no "restart server" command.
+11. Server layouts: Antigravity `~/.antigravity-ide-server/bin/<ideVersion>-<commit>/`, VSCodium `~/.vscodium-server/bin/<commit>/`, VS Code `~/.vscode-server/bin/<commit>/`. The server root (= `vscode.env.appRoot`) contains `product.json` with a top-level `commit`.
+12. VSCodium's server works like Antigravity's: the pid file `<dataDir>/.<commit>.pid` holds the pid of the wrapper `sh <root>/bin/<serverApplicationName>`, which is the parent of `node <root>/out/server-main.js --start-server ...`, which is the extension host's parent (`process.ppid`). Both auto-shut down 300 seconds after the last window disconnects (`--enable-remote-auto-shutdown`).
+13. VS Code (Microsoft's remote-wsl) has no pid file and no `--start-server`; its Windows-side wslDaemon caches the resolved port, so after the server is killed a reloaded window can receive a stale port while other windows keep the daemon alive. Closing all VS Code windows connected to the distro makes the daemon exit (3 s) and stop the server; reopening starts a new one. Therefore VS Code's server is never restarted automatically. (Read from the remote-wsl 0.104.3 source `dist/node/wslDaemon.js` and `scripts/wslServer.sh`; not verified at runtime.)
 
 ## 3. Overall design
 
@@ -83,17 +86,35 @@ fi
 
 ## 5. Restarting the WSL-side server
 
-- Locating: server = the extension host's parent process `process.ppid`. Only act when all checks pass; otherwise refuse and show the manual method:
-  - `process.ppid !== 1`;
-  - `/proc/<ppid>/cmdline` contains `out/server-main.js` and `--start-server`;
-  - the value of the pid file `~/.antigravity-ide-server/.<commit>.pid` equals the parent pid in `/proc/<ppid>/stat` (i.e. the wrapper script).
+- Editor kind (whitelist, not generic parsing): the server root is the path before `/out/server-main.js` in `/proc/<ppid>/cmdline`, the data directory is `dirname(dirname(root))`, and it must be exactly one of these directories directly under `$HOME`:
+
+| Data directory | Kind | Restart |
+|---|---|---|
+| `~/.antigravity-ide-server` | `antigravity` | automatic (pid file) |
+| `~/.vscodium-server` | `vscodium` | automatic (pid file) |
+| `~/.vscode-server`, `~/.vscode-server-insiders` | `vscode` | manual guidance only (reason: section 2 item 13) |
+| anything else, or detection failure | `unknown` | generic manual guidance only |
+
+- Manual kinds (`vscode`, `unknown`) are never signaled; the switch still writes the state file, and the user restarts the server by hand.
+- Locating (automatic kinds): server = the extension host's parent process `process.ppid`. Only act when all checks pass, in this order; otherwise refuse and show the manual method:
+  - `process.ppid > 1`;
+  - `/proc/<ppid>/cmdline` contains `out/server-main.js` and `--start-server`, the server root can be parsed, and the kind of its data directory can auto restart;
+  - the top-level `commit` of `<root>/product.json` is 40 lowercase hex characters;
+  - the basename of the root equals the commit or ends with `-<commit>`;
+  - the value of the pid file `<dataDir>/.<commit>.pid` equals the parent pid in `/proc/<ppid>/stat` (i.e. the wrapper script).
 - Order:
   1. Finish writing the state file first (including fsync).
   2. Enumerate `/proc/*/stat` and collect every child whose parent is the server (extension hosts, pty host, file watcher, etc.), excluding this extension host itself.
   3. Send `SIGTERM` to the server, then to the children collected in step 2. Use `process.kill`, never shell commands. This extension host exits by itself through its parent-process guard.
 - Afterwards: every WSL window shows "Cannot reconnect. Please reload the window.", and the user clicks "Reload Window".
-- Manual method: close all Antigravity windows connected to that distribution, wait at least 5 minutes (the server auto-shutdown delay is 300 seconds), then open them again.
-- Modal confirmation before switching: "Switching the Codex account restarts Antigravity's WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?"
+- Manual method, by kind (`{editor}` is "Antigravity" or "VSCodium", not localized):
+  - `antigravity` / `vscodium`: "Manual alternative: close all {editor} windows connected to this distro, wait at least 5 minutes, then reopen." (the server auto-shutdown delay is 300 seconds)
+  - `vscode`: "Close all VS Code windows connected to this distro, wait a few seconds, then reopen them."
+  - `unknown`: "Close all editor windows connected to this distro and reopen them after the editor's WSL server has exited."
+- Modal confirmation before switching:
+  - automatic kinds: "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?"
+  - manual kinds: "The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?" (`{hint}` is the manual method above); after confirming and writing the state file, the warning "This editor's WSL server cannot be restarted automatically. {hint}" is shown.
+- "Restart WSL Server": automatic kinds show the modal "Restart {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?"; manual kinds show the warning "This editor's WSL server cannot be restarted automatically. {hint}" directly, without a modal.
 
 ## 6. Data model
 
@@ -137,9 +158,9 @@ Command titles below are the English entries of `package.nls.json`; the category
 
 1. Return immediately when the target equals both the directory effective in this window and the content of the state file.
 2. Report an error and return when the target directory does not exist.
-3. Modal confirmation (text from section 5).
+3. Modal confirmation (text from section 5, depending on the editor kind).
 4. Write the state file atomically (empty for the default account).
-5. Restart the server as in section 5; when the checks fail, show the manual method.
+5. Restart the server as in section 5; for manual kinds, or when the checks fail, show the manual method.
 
 ### 8.2 Add
 
@@ -179,7 +200,7 @@ src/codex/
                      seed config.toml copy, AGENTS.md link, delete checks (incl. daemon)
   codexState.ts      atomic state file I/O, rc marker block detect/write/remove,
                      pre-check, self-check
-  codexServer.ts     locate, verify and restart the WSL-side server
+  codexServer.ts     detect the editor kind, locate, verify and restart the WSL-side server
   codexStore.ts      codex.accounts / codex.ignoredDirs
   codexCommands.ts   codexPanelSource; enable / disable / switch / add / remove / terminal /
                      restart / rename; handles Codex page messages
@@ -205,7 +226,7 @@ Logic shared with Claude (path safety checks, shQuote, avatars, global rules lin
 
 ## 12. Known limitations
 
-1. Every Codex account switch restarts the WSL-side server: all WSL windows disconnect and each needs one "Reload Window" click; integrated terminals close.
+1. Every Codex account switch restarts the WSL-side server: all WSL windows disconnect and each needs one "Reload Window" click; integrated terminals close. The restart is automatic only in Antigravity and VSCodium; in VS Code and unrecognized editors the user closes and reopens the windows.
 2. The state file is global and the last writer wins; other windows switch as well after the server restarts.
 3. Local data of each account (sessions, skills, prompts, memories, approval rules, etc.) is independent.
 4. Relies on two behaviors: Antigravity resolves the extension host environment through a login shell, and the server is started again automatically after it dies. Both come from the upstream VS Code implementation and must be re-verified after upgrades.

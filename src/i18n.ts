@@ -57,11 +57,17 @@ export const en = {
 
   // Codex commands
   'codex.manualRestartHint':
-    'Manual alternative: close all Antigravity windows connected to this distro, wait at least 5 minutes, then reopen.',
+    'Manual alternative: close all {editor} windows connected to this distro, wait at least 5 minutes, then reopen.',
+  'codex.manualRestartHintVscode': 'Close all VS Code windows connected to this distro, wait a few seconds, then reopen them.',
+  'codex.manualRestartHintUnknown':
+    "Close all editor windows connected to this distro and reopen them after the editor's WSL server has exited.",
+  'codex.manualRestartRequired': "This editor's WSL server cannot be restarted automatically. {hint}",
   'codex.switchConfirm':
-    "Switching the Codex account restarts Antigravity's WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
+    "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
+  'codex.switchConfirmManual':
+    'The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?',
   'codex.restartConfirm':
-    "Restart Antigravity's WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
+    "Restart {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
   'codex.restartPlanFailed': 'Cannot restart the WSL server automatically: {error}\n{hint}',
   'codex.restartFailed': 'Failed to restart the WSL server: {error}\n{hint}',
   'codex.rollbackMissingEnd': 'The marker block in {file} is missing its end marker; not rolled back. Please remove it manually',
@@ -115,8 +121,8 @@ export const en = {
   // codexServer.planRestart
   'server.statUnparseable': 'Cannot parse stat format',
   'server.notFound': 'Cannot find the WSL server process',
-  'server.notAntigravity': "Parent process is not Antigravity's WSL server: {cmdline}",
-  'server.noCommit': 'Cannot parse the commit from the server command line',
+  'server.unsupported': 'Parent process is not a WSL server that supports automatic restart: {cmdline}',
+  'server.noCommit': 'Cannot read the server commit from product.json',
   'server.pidReadFailed': 'Failed to read pid file: {file}',
   'server.pidMismatch': 'The pid file does not match the server process',
 
@@ -204,11 +210,15 @@ export const zhCn: Record<MessageKey, string> = {
   'claude.loginNotLanded':
     '登录未落到该目录：{dir} 下未检测到登录信息。请检查 ~/.bashrc 等是否覆盖了 CLAUDE_CONFIG_DIR，或重新打开终端登录。',
 
-  'codex.manualRestartHint': '手动方式：关闭所有连接到该发行版的 Antigravity 窗口，等待至少 5 分钟后重新打开。',
+  'codex.manualRestartHint': '手动方式：关闭所有连接到该发行版的 {editor} 窗口，等待至少 5 分钟后重新打开。',
+  'codex.manualRestartHintVscode': '关闭所有连接到该发行版的 VS Code 窗口，等待几秒后重新打开。',
+  'codex.manualRestartHintUnknown': '关闭所有连接到该发行版的编辑器窗口，待编辑器的 WSL 服务端退出后重新打开。',
+  'codex.manualRestartRequired': '无法自动重启此编辑器的 WSL 服务端。{hint}',
   'codex.switchConfirm':
-    '切换 Codex 账号会重启 Antigravity 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
+    '切换 Codex 账号会重启 {editor} 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
+  'codex.switchConfirmManual': '新 Codex 账号要在 WSL 服务端重启后才生效，此编辑器无法自动重启。{hint}继续？',
   'codex.restartConfirm':
-    '重启 Antigravity 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
+    '重启 {editor} 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
   'codex.restartPlanFailed': '无法自动重启 WSL 服务端：{error}\n{hint}',
   'codex.restartFailed': '重启 WSL 服务端失败：{error}\n{hint}',
   'codex.rollbackMissingEnd': '{file} 中的标记块缺少结束标记，未回滚，请手动删除',
@@ -255,8 +265,8 @@ export const zhCn: Record<MessageKey, string> = {
 
   'server.statUnparseable': 'stat 格式无法解析',
   'server.notFound': '找不到 WSL 服务端进程',
-  'server.notAntigravity': '父进程不是 Antigravity 的 WSL 服务端：{cmdline}',
-  'server.noCommit': '无法从服务端命令行解析 commit',
+  'server.unsupported': '父进程不是支持自动重启的 WSL 服务端：{cmdline}',
+  'server.noCommit': '无法从 product.json 读取服务端 commit',
   'server.pidReadFailed': '读取 pid 文件失败：{file}',
   'server.pidMismatch': 'pid 文件与服务端进程不匹配',
 
