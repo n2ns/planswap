@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-26
+
+### Fixed
+
+- Double-clicking a button inside an account row no longer switches to that account; a double click on the switch button sends a single switch.
+- Codex: a switch request is ignored while another switch is still waiting for confirmation.
+- Codex: disabling no longer changes `~/.bashrc` when `~/.profile` has a broken marker block (and vice versa); neither file is changed.
+- Codex: rolling back a failed enable keeps a symlinked `~/.bashrc` / `~/.profile` a symlink; enable followed by disable restores files without a trailing newline or with CRLF line endings exactly.
+- Codex: blocked keys in `config.toml` are also detected as dotted keys, quoted keys, inline tables, `[model_providers]` and spaced table headers, and lines inside multi-line values are no longer mistaken for keys or headers.
+- Account names such as `constructor` or `__proto__` no longer show a garbled display name, and their alias can be saved.
+- Auto-discovery skips a directory whose name equals another account's display name.
+- A directory deleted together with its account is discovered again if it is recreated later.
+- The delete-directory prompt shows the account's display name instead of its internal name.
+- Opening `CLAUDE.md` / `AGENTS.md` when it is a dangling symlink creates the link target instead of failing.
+- Email and plan are read from `~/.claude/.claude.json` when the setting explicitly points `CLAUDE_CONFIG_DIR` at `~/.claude`.
+- The "sign-in did not complete" warning after closing a terminal is only shown when the account is still signed out.
+- An add error reported by the extension is no longer cleared by the next panel refresh.
+- The version card follows a language change while it is open.
+- Pressing Enter to confirm an IME candidate no longer submits the rename or add input.
+- Smaller package: the icon is 256 × 256 and the README banner is compressed and no longer bundled.
+
 ## [0.1.1] - 2026-09-26
 
 ### Fixed
