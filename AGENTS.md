@@ -197,7 +197,7 @@ Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.c
 - In `resolveWebviewView`, `webview.html` (with CSP) must be set before `webview.options`. In the reverse order the editor first loads an empty page and logs "created a webview without a content security policy".
 - A "focus the add input" request received before the panel page has sent `ready` must be queued and sent after `ready`, otherwise it is lost.
 
-- Always read or watch the account info file through `claudeJsonPath(dir)`: for the default account without `CLAUDE_CONFIG_DIR`, that file is `~/.claude.json`, not `~/.claude/.claude.json`.
+- Always read or watch the account info file through `claudeJsonPath(dir, isExplicitConfigDir(dir))`: for the default account without `CLAUDE_CONFIG_DIR` (neither in the extension host environment nor set explicitly in the setting), that file is `~/.claude.json`, not `~/.claude/.claude.json`.
 
 - `engines.vscode` and `@types/vscode` are pinned to 1.107 (the user uses Antigravity IDE, whose core is VS Code 1.107.0). Do not upgrade these two to the latest version, or the extension will be refused by the user's editor. Other dependencies may use the latest stable version. This constraint still applies with the Webview; new frontend dependencies must not require newer editor APIs.
 

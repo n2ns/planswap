@@ -81,7 +81,7 @@ fi
   5. If the marker block of either file is damaged (start marker `# >>> ai-switcher codex >>>` without end marker `# <<< ai-switcher codex <<<`, `broken` in `rcStatus`), an error asks for a manual fix before retrying.
 - Self-check after writing: write a temporary state file pointing to a temporary empty directory, run `bash -i -l -c 'printf %s "$CODEX_HOME"'` and check the output, then restore the state file and delete the temporary directory. When the self-check fails, roll back **per file**: only the marker blocks newly written in this run are removed; files that already had a block before enabling are left alone; then report.
 - The rc files and the state file are written atomically (temporary file in the same directory + rename), so a half-written rc file can never be left behind.
-- `aiSwitcher.codex.disable`: remove both blocks by their markers and delete the state file. If either file lacks the end marker, an error is thrown, that file is not changed, and the user is asked to fix it manually.
+- `aiSwitcher.codex.disable`: remove both blocks by their markers and delete the state file. If either file lacks the end marker, an error is thrown, neither file is changed (both files are checked before anything is written), and the user is asked to fix it manually.
 - Pre-check reasons, the modal texts and the self-check result are localized; the block written to the files is not.
 
 ## 5. Restarting the WSL-side server
@@ -156,6 +156,8 @@ Command titles below are the English entries of `package.nls.json`; the category
 
 ### 8.1 Switch
 
+A switch request that arrives while another switch is in progress (e.g. its modal is open) is ignored.
+
 1. Return immediately when the target equals both the directory effective in this window and the content of the state file.
 2. Report an error and return when the target directory does not exist.
 3. Modal confirmation (text from section 5, depending on the editor kind).
@@ -166,14 +168,14 @@ Command titles below are the English entries of `package.nls.json`; the category
 
 1. Name validation as on the Claude side: `^[A-Za-z0-9_-]+$`, not equal to `default`, not equal to the name or label of any Codex account, `~/.codex-<name>` not equal to `~/.codex` (compared after resolving symlinks).
 2. Create `~/.codex-<name>` (0700).
-3. Copy `config.toml` from `~/.codex` as a starting point (`copyCodexSeed`; an existing target is never overwritten, mode 0600). `AGENTS.md` is not copied; instead `linkGlobalRules(dir)` symlinks it to the default account's file (see "Shared global rules" in interfaces.md). If `config.toml` contains any of the following top-level keys it is not copied and the reason is explained: `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`; a `[model_providers.` section also prevents copying. Nothing else is copied (including `packages/`; the CLI binary stays under `~/.codex/packages` and keeps working).
+3. Copy `config.toml` from `~/.codex` as a starting point (`copyCodexSeed`; an existing target is never overwritten, mode 0600). `AGENTS.md` is not copied; instead `linkGlobalRules(dir)` symlinks it to the default account's file (see "Shared global rules" in interfaces.md). If `config.toml` contains any of the following top-level keys it is not copied and the reason is explained: `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`; `model_providers` in any form (a `[model_providers]` / `[model_providers.x]` table, a dotted key `model_providers.x.base_url = …`, an inline table `model_providers = { … }`) also prevents copying. Keys are matched after normalizing quotes and whitespace around dots (`"model_provider" = …`, `[ model_providers.x ]`), and a dotted key or table header counts when its first segment is blocked. Nothing else is copied (including `packages/`; the CLI binary stays under `~/.codex/packages` and keeps working).
 4. Register the account, refresh the view.
 
 ### 8.3 Remove
 
 - The default account, the account effective in this window and the account the state file currently points to cannot be removed.
 - Remove it from the list and record it in `codex.ignoredDirs`, clear its alias with `labels.remove(name)`; then confirm with a modal whether to delete the directory.
-- Checks before deleting the directory: a direct child of the home directory; the basename matches `^\.codex-[A-Za-z0-9_-]+$`; not equal to `~/.codex` after resolving symlinks; not a symlink; no live daemon. Daemon check: read `daemon.pid`, `app-server.pid`, `daemon-updater.pid`, `app-server-updater.pid` under `<dir>/app-server-daemon/` (whichever exist); the content is JSON; take `pid` and `processStartTime`/`processIdentity.startTicks` and compare with the start time in `/proc/<pid>/stat`; a match means alive and deletion is refused; a missing file or parse failure counts as not alive. When the checks pass, delete with `fs.rm`.
+- Checks before deleting the directory: a direct child of the home directory; the basename matches `^\.codex-[A-Za-z0-9_-]+$`; not equal to `~/.codex` after resolving symlinks; not a symlink; no live daemon. Daemon check: read `daemon.pid`, `app-server.pid`, `daemon-updater.pid`, `app-server-updater.pid` under `<dir>/app-server-daemon/` (whichever exist); the content is JSON; take `pid` and `processStartTime`/`processIdentity.startTicks` and compare with the start time in `/proc/<pid>/stat`; a match means alive and deletion is refused; a missing file or parse failure counts as not alive. When the checks pass, delete with `fs.rm` and remove the directory from `codex.ignoredDirs` (`store.unignore`).
 - **Note: the daemon check depends on the JSON format of codex's pid files (field names `pid`, `processIdentity.startTicks` / `processStartTime`); re-verify after codex upgrades.**
 
 ### 8.4 Terminal

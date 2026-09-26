@@ -2,7 +2,7 @@
 import { after, before, beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
-import { currentDir, setConfigDir } from '../src/claudeSettings';
+import { currentDir, isExplicitConfigDir, setConfigDir } from '../src/claudeSettings';
 import { ConfigurationTarget, resetConfig, setConfig, updates } from './stubs/vscode';
 import { assertTempHome, makeTempHome, type TempHome } from './helpers';
 
@@ -52,6 +52,22 @@ describe('currentDir (getConfiguredConfigDir)', () => {
   test('neither array nor object (e.g. a string) → default directory', () => {
     set('garbage');
     assert.equal(currentDir(), def);
+  });
+});
+
+describe('isExplicitConfigDir', () => {
+  test('setting missing or empty → false, even for the default directory', () => {
+    assert.equal(isExplicitConfigDir(def), false);
+    set([{ name: 'CLAUDE_CONFIG_DIR', value: '' }]);
+    assert.equal(isExplicitConfigDir(def), false);
+  });
+  test('true only for the configured directory (default directory included)', () => {
+    set([{ name: 'CLAUDE_CONFIG_DIR', value: def + '/' }]);
+    assert.equal(isExplicitConfigDir(def), true);
+    assert.equal(isExplicitConfigDir(path.join(home, '.claude-a')), false);
+    set({ CLAUDE_CONFIG_DIR: path.join(home, '.claude-a') });
+    assert.equal(isExplicitConfigDir(path.join(home, '.claude-a')), true);
+    assert.equal(isExplicitConfigDir(def), false);
   });
 });
 

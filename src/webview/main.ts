@@ -56,15 +56,22 @@ function h(tag: string, attrs: Attrs = {}, ...children: Child[]): HTMLElement {
   return el;
 }
 
-function onClick<T extends HTMLElement>(el: T, fn: () => void): T {
+function onClick<T extends HTMLElement>(el: T, fn: (e: MouseEvent) => void): T {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    fn();
+    fn(e);
   });
+  // A double-click on a button must not reach the row's dblclick (which switches accounts)
+  el.addEventListener('dblclick', (e) => e.stopPropagation());
   return el;
 }
 
-function toolbarButton(icon: string, label: string, fn: () => void): HTMLElement {
+// Enter / Escape while an IME is composing only confirm or cancel the candidate (keyCode 229 covers older engines)
+function isComposing(e: KeyboardEvent): boolean {
+  return e.isComposing || e.keyCode === 229;
+}
+
+function toolbarButton(icon: string, label: string, fn: (e: MouseEvent) => void): HTMLElement {
   return onClick(h('vscode-toolbar-button', { icon, label, title: label, class: 'icon-btn' }), fn);
 }
 
@@ -127,6 +134,10 @@ class Page {
   private tools: HTMLElement;
   private readonly addSection: HTMLElement;
   private adding = false;
+  // Add error from the host (addResult); kept across re-renders until the input is edited or a new result arrives
+  private addError?: string;
+  // Time of the last switch sent from a row button; a double click whose second click lands on a re-rendered row must not switch again
+  private lastSwitchAt = 0;
   // Account directory whose removal is being confirmed inline
   private confirmingDir?: string;
   // Inline rename state (keyed by dir, one row at a time): the field is created once and reused across re-renders to keep input and focus
@@ -150,9 +161,12 @@ class Page {
       h('div', { class: 'input-group' }, this.addField, this.addButton),
       this.addHelp,
     );
-    this.addField.addEventListener('input', () => this.updateAddHelp());
+    this.addField.addEventListener('input', () => {
+      this.addError = undefined;
+      this.updateAddHelp();
+    });
     this.addField.addEventListener('keydown', (e) => {
-      if ((e as KeyboardEvent).key === 'Enter') this.submitAdd();
+      if ((e as KeyboardEvent).key === 'Enter' && !isComposing(e as KeyboardEvent)) this.submitAdd();
     });
     onClick(this.addButton, () => this.submitAdd());
     this.tools = this.renderTools();
@@ -166,6 +180,11 @@ class Page {
     this.addField.setAttribute('aria-label', t('add.ariaLabel'));
     this.addButton.textContent = t('add.button');
     this.addTitle.textContent = t('add.title');
+    // A host add error is in the old locale; drop it so the help line shows the local validation in the new one
+    if (this.addError) {
+      this.addError = undefined;
+      this.updateAddHelp();
+    }
     const tools = this.renderTools();
     this.tools.replaceWith(tools);
     this.tools = tools;
@@ -197,11 +216,9 @@ class Page {
 
   onAddResult(error?: string): void {
     this.adding = false;
-    if (error) this.updateAddHelp(error);
-    else {
-      this.addField.value = '';
-      this.updateAddHelp();
-    }
+    this.addError = error;
+    if (!error) this.addField.value = '';
+    this.updateAddHelp();
   }
 
   onRenameResult(dir: string, error?: string): void {
@@ -235,6 +252,7 @@ class Page {
     });
     field.addEventListener('keydown', (e) => {
       const key = (e as KeyboardEvent).key;
+      if (isComposing(e as KeyboardEvent)) return;
       if (key === 'Enter') {
         e.preventDefault();
         this.submitRename();
@@ -310,9 +328,9 @@ class Page {
     return undefined;
   }
 
-  private updateAddHelp(serverError?: string): void {
+  private updateAddHelp(): void {
     const name = this.addField.value.trim();
-    const error = serverError ?? this.validateName(name);
+    const error = this.addError ?? this.validateName(name);
     this.addField.invalid = !!error;
     this.addButton.disabled = this.adding || !name || !!error;
     this.addHelp.className = error ? 'help error' : 'help';
@@ -322,7 +340,7 @@ class Page {
 
   private submitAdd(): void {
     const name = this.addField.value.trim();
-    if (this.adding || !name || this.validateName(name)) return;
+    if (this.adding || this.addError || !name || this.validateName(name)) return;
     this.adding = true;
     this.updateAddHelp();
     this.send({ type: 'add', name });
@@ -416,7 +434,16 @@ class Page {
     const actions = h('div', { class: 'row-actions' });
     if (!editing) {
       if (a.kind !== 'external') actions.append(toolbarButton('edit', t('row.rename'), () => this.startRename(a)));
-      if (!a.isCurrent) actions.append(toolbarButton('arrow-swap', t('row.switch'), () => this.send({ type: 'switch', dir: a.dir })));
+      // The second click of a double-click (detail > 1) would send a duplicate switch
+      if (!a.isCurrent) {
+        actions.append(
+          toolbarButton('arrow-swap', t('row.switch'), (e) => {
+            if (e.detail > 1) return;
+            this.lastSwitchAt = Date.now();
+            this.send({ type: 'switch', dir: a.dir });
+          }),
+        );
+      }
       // Not logged in: a "Log in" text button; logged in: a terminal icon to run the CLI with this account
       if (a.loggedIn) {
         actions.append(toolbarButton('terminal', t(`${this.mode}.terminalTitle`), () => this.send({ type: 'terminal', dir: a.dir })));
@@ -462,7 +489,9 @@ class Page {
     );
     // Double-click on a non-current row switches; single click does nothing, to avoid accidents
     if (!a.isCurrent && !editing) {
-      row.addEventListener('dblclick', () => this.send({ type: 'switch', dir: a.dir }));
+      row.addEventListener('dblclick', () => {
+        if (Date.now() - this.lastSwitchAt > 500) this.send({ type: 'switch', dir: a.dir });
+      });
       row.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && e.target === row) this.send({ type: 'switch', dir: a.dir });
       });
@@ -570,7 +599,15 @@ function renderFooter(): void {
 // Versions card: shown above the footer toolbar; the info button again or the close button hides it
 const versionsCard = h('div', { class: 'versions', hidden: true, role: 'status' });
 let versionItems: Array<{ label: string; value: string }> = [];
+// Pending re-requests after locale changes while the card was open: those versions messages replace the items instead of toggling the card
+let refreshingVersions = 0;
 function showVersions(items: Array<{ label: string; value: string }>): void {
+  if (refreshingVersions > 0) {
+    refreshingVersions--;
+    versionItems = items;
+    renderVersions();
+    return;
+  }
   if (!versionsCard.hidden) {
     versionsCard.hidden = true;
     return;
@@ -599,6 +636,11 @@ function applyLocale(): void {
   tabBar.setAttribute('aria-label', t('tabs.ariaLabel'));
   renderFooter();
   renderVersions();
+  // Item labels and values are host strings in the old locale; ask the host to regenerate them
+  if (!versionsCard.hidden) {
+    refreshingVersions++;
+    send({ type: 'tool', mode: activeTab ?? state.active, tool: 'cliVersions' });
+  }
   for (const mode of MODES) pages[mode].applyLocale();
 }
 

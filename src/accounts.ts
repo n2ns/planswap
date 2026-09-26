@@ -1,6 +1,7 @@
 import type { Memento } from 'vscode';
 import type { Account } from './paths';
 import { DEFAULT_NAME, defaultDir, samePath, scanAccountDirs } from './paths';
+import { labelFor, type LabelStore } from './labels';
 
 const STATE_KEY = 'accounts';
 // Accounts deleted but whose directories were kept; skipped by the auto scan
@@ -52,11 +53,21 @@ export class AccountStore {
     await this.save(this.load().filter((a) => a.name !== name));
   }
 
-  async syncWithDisk(): Promise<void> {
+  // Called after the directory was deleted, so a recreated directory is auto-discovered again
+  async unignore(dir: string): Promise<void> {
+    await this.state.update(IGNORED_KEY, this.ignored().filter((d) => !samePath(d, dir)));
+  }
+
+  // labels: scanned names equal to an existing account's display name are skipped until that alias changes
+  async syncWithDisk(labels?: LabelStore): Promise<void> {
     const list = this.load();
     const ignored = this.ignored();
+    const taken = labels ? this.all().map((a) => labelFor(a.name, labels)) : [];
     const missing = scanAccountDirs().filter(
-      (s) => !ignored.some((d) => samePath(d, s.dir)) && !list.some((a) => a.name === s.name || samePath(a.dir, s.dir)),
+      (s) =>
+        !ignored.some((d) => samePath(d, s.dir)) &&
+        !list.some((a) => a.name === s.name || samePath(a.dir, s.dir)) &&
+        !taken.includes(s.name),
     );
     if (missing.length) await this.save([...list, ...missing]);
   }

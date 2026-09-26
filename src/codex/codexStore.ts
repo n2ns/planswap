@@ -1,5 +1,6 @@
 import type { Memento } from 'vscode';
 import { samePath } from '../paths';
+import { labelFor, type LabelStore } from '../labels';
 import type { CodexAccount } from './codexPaths';
 import { CODEX_DEFAULT_NAME, codexDefaultDir, scanCodexDirs } from './codexPaths';
 
@@ -53,11 +54,21 @@ export class CodexAccountStore {
     await this.save(this.load().filter((a) => a.name !== name));
   }
 
-  async syncWithDisk(): Promise<void> {
+  // Called after the directory was deleted, so a recreated directory is auto-discovered again
+  async unignore(dir: string): Promise<void> {
+    await this.state.update(IGNORED_KEY, this.ignored().filter((d) => !samePath(d, dir)));
+  }
+
+  // labels: scanned names equal to an existing account's display name are skipped until that alias changes
+  async syncWithDisk(labels?: LabelStore): Promise<void> {
     const list = this.load();
     const ignored = this.ignored();
+    const taken = labels ? this.all().map((a) => labelFor(a.name, labels)) : [];
     const missing = scanCodexDirs().filter(
-      (s) => !ignored.some((d) => samePath(d, s.dir)) && !list.some((a) => a.name === s.name || samePath(a.dir, s.dir)),
+      (s) =>
+        !ignored.some((d) => samePath(d, s.dir)) &&
+        !list.some((a) => a.name === s.name || samePath(a.dir, s.dir)) &&
+        !taken.includes(s.name),
     );
     if (missing.length) await this.save([...list, ...missing]);
   }

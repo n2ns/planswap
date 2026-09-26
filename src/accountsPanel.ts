@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import * as os from 'node:os';
 import { DEFAULT_NAME, claudeJsonPath, readAccountInfo, samePath, type Account } from './paths';
-import { currentDir } from './claudeSettings';
+import { currentDir, isExplicitConfigDir } from './claudeSettings';
 import type { AccountStore } from './accounts';
 import { EXTERNAL_NAME, labelFor, type LabelStore } from './labels';
 import type { AccountView, FromWebview, PanelMode, PanelState, TabState, ToWebview } from './protocol';
@@ -34,7 +34,7 @@ export function claudePanelSource(store: AccountStore, labels: LabelStore): Pane
       label: labelFor(a.name, labels),
       dir: a.dir,
       dirLabel: tildify(a.dir),
-      ...readAccountInfo(a.dir),
+      ...readAccountInfo(a.dir, isExplicitConfigDir(a.dir)),
       isCurrent: samePath(a.dir, cur),
     }));
     if (!rows.some((r) => r.isCurrent)) {
@@ -44,7 +44,7 @@ export function claudePanelSource(store: AccountStore, labels: LabelStore): Pane
         label: labelFor(EXTERNAL_NAME, labels),
         dir: cur,
         dirLabel: tildify(cur),
-        ...readAccountInfo(cur),
+        ...readAccountInfo(cur, isExplicitConfigDir(cur)),
         isCurrent: true,
       });
     }
@@ -54,7 +54,7 @@ export function claudePanelSource(store: AccountStore, labels: LabelStore): Pane
     accounts,
     enabled: () => true,
     pendingDir: () => undefined,
-    watchTargets: () => accounts().map((r) => claudeJsonPath(r.dir)),
+    watchTargets: () => accounts().map((r) => claudeJsonPath(r.dir, isExplicitConfigDir(r.dir))),
   };
 }
 

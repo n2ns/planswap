@@ -108,9 +108,9 @@ After clicking a row's remove button, the row turns into a confirmation area in 
 Always present at the bottom of each page (with a divider above it):
 
 - Title "Add account", an input (placeholder "Account name, e.g. work") and an **Add** button (with the `add` icon) joined as a group, with one help line below.
-- Typing is validated live with immediate hints (details in 4.2): an invalid name turns the input red and the help line shows the reason; the add button is disabled while the input is empty, invalid or being submitted. The disabled state still looks like a button: accent color mixed 40% with the input background + accent outline, text and plus sign still readable (dark accent text in light themes); the enabled state is solid accent, brighter on hover, with a glow ring on focus.
+- Typing is validated live with immediate hints (details in 4.2): an invalid name turns the input red and the help line shows the reason; the add button is disabled while the input is empty, invalid, being submitted, or showing an add failure reported by the extension. The disabled state still looks like a button: accent color mixed 40% with the input background + accent outline, text and plus sign still readable (dark accent text in light themes); the enabled state is solid accent, brighter on hover, with a glow ring on focus.
 - The help line shows "Each account uses its own config directory ~/.claude-<name>" while the input is empty, and "Will create directory ~/.claude-<name> and copy the default account's settings" for a valid name.
-- Enter or the add button submits. On success the input is cleared; on failure the reason is shown in the help line.
+- Enter or the add button submits. On success the input is cleared; on failure the reason is shown in the help line and stays (also across list refreshes) until the input is edited or the display language changes.
 - List refreshes do not affect the text already typed into the input or its focus.
 
 ### 2.6 Title bar button
@@ -203,7 +203,7 @@ Flow:
 2. The current account cannot be removed: in the panel the current row has no remove button, and the Command Palette list does not contain the current account. To remove the current account, switch to another account first.
 3. The account is removed from the list, its alias (if any) is cleared, the directory's file watcher is released, and the panel and the status bar are refreshed.
 4. Deleting the directory is always confirmed again with a system modal (regardless of the entry point): "Account <account name> was removed from the list. Also delete directory <dir>?", with the button **Delete Directory**. The detail text: the directory contains the sign-in credentials and session history and cannot be recovered after deletion; and if you just switched away from this account without reloading, open sessions are still using this directory.
-5. After confirmation, the safety checks run first (see section 7); if they pass the directory is deleted; if they fail or deletion errors, "Failed to delete directory: <reason>" is shown.
+5. After confirmation, the safety checks run first (see section 7); if they pass the directory is deleted and removed from the ignore list again (so a directory recreated later with the same name is auto-discovered); if they fail or deletion errors, "Failed to delete directory: <reason>" is shown.
 
 If you choose not to delete the directory, it stays on disk and is recorded in the ignore list, so auto-discovery will not register it again. Typing the same name into the add-account input later registers it again and removes it from the ignore list.
 
@@ -221,7 +221,7 @@ Flow:
    - non-default account: `env CLAUDE_CONFIG_DIR='<absolute path>' claude`, which bypasses a possible `export CLAUDE_CONFIG_DIR` in rc files such as `~/.bashrc`; the terminal env parameter is a second safeguard.
    - default account: no variable is injected; `claude` is sent directly.
 3. Show the terminal. The first run in a new directory goes through Claude Code's first-run onboarding; under WSL sign-in uses paste code.
-4. When a terminal created by this extension closes, the panel and the status bar are refreshed; if it was a non-default account and its account info file still has no email, the message "Login did not land in this directory: no login info found under <dir>. Check whether ~/.bashrc or similar overrides CLAUDE_CONFIG_DIR, or reopen the terminal and log in again." is shown.
+4. When a terminal created by this extension closes, the panel and the status bar are refreshed; if it was neither the default account nor the external directory and the account is still not signed in (the same state the panel rows use: no email in its account info file and no `.credentials.json`, whose existence only is checked), the message "Login did not land in this directory: no login info found under <dir>. Check whether ~/.bashrc or similar overrides CLAUDE_CONFIG_DIR, or reopen the terminal and log in again." is shown.
 
 Prerequisite: a `claude` command on PATH.
 
@@ -238,7 +238,8 @@ On activation and on refresh the home directory is scanned; a directory that mee
 - the basename matches `^\.claude-[A-Za-z0-9_-]+$`;
 - it is a real directory, not a symlink;
 - it is not the default directory (compared after resolving symlinks);
-- it is not in the ignore list (directories kept when removing an account go into the ignore list).
+- it is not in the ignore list (directories kept when removing an account go into the ignore list);
+- its name does not equal the display name (alias) of an existing account; such a directory is skipped until the conflicting alias is changed.
 
 The account name is the basename without the `.claude-` prefix. This keeps the list from becoming empty when `globalState` is lost and also adopts manually created directories.
 
@@ -256,7 +257,7 @@ The copy happens only once; afterwards each directory's `settings.json` is indep
 - **Footer toolbar pinned to the bottom of the panel** (outside the tab pages, always visible, shared by both pages): four icon buttons, left to right: Show CLI and extension versions (`info`), Reload Window (`refresh`, no confirmation), Restart Extension Host (`debug-restart`, no confirmation), Restart WSL Server (`server-process`, uses the Codex modal confirmation and checks, or the manual-restart warning in editors that cannot restart automatically, see 10.6; when Codex is not initialized: "The Codex part is not initialized; cannot restart the WSL server.").
 - **Version card**: after clicking "Show CLI and extension versions", the extension runs `claude --version` and `codex --version` in parallel (`execFile`, no shell, 8-second timeout), reads the versions of the two official extensions, and pushes them to the panel, which expands a card above the toolbar: title "CLI and extension versions" plus a close button, and below it four items `Claude Code CLI`, "Claude Code extension", `Codex CLI`, "Codex extension", each on two vertical lines (label on one line, value on the next, the value in monospace and wrappable). Clicking the info button again or close collapses it. Not installed shows "Not found", a timeout shows "Timed out", other failures show an error summary; no network access, no update check.
 - **"Tools" row inside each tab page** (between the account list and the add-account section, title "Tools", three labeled secondary buttons that wrap automatically when they do not fit):
-  - `CLAUDE.md` (Claude page) / `AGENTS.md` (Codex page), ruler icon `symbol-ruler`: opens `<current effective directory>/CLAUDE.md` or `<current effective directory>/AGENTS.md` (Claude uses `currentDir()`, Codex uses `effectiveDir()`); when the file does not exist, a modal asks "File does not exist. Create it?", and after confirmation an empty file (0600) is created and opened.
+  - `CLAUDE.md` (Claude page) / `AGENTS.md` (Codex page), ruler icon `symbol-ruler`: opens `<current effective directory>/CLAUDE.md` or `<current effective directory>/AGENTS.md` (Claude uses `currentDir()`, Codex uses `effectiveDir()`); when the file does not exist, a modal asks "File does not exist. Create it?", and after confirmation an empty file (0600) is created and opened. When the file is a dangling symlink (e.g. to a deleted default rules file), the empty file is created at the link target so the link works again; if the target's directory does not exist, "Failed to create file: <reason>" is shown.
   - Settings, icon `settings-gear`: opens the Settings UI filtered by `claudeCode.` (Claude page) / `chatgpt.` (Codex page).
   - Sync rules, icon `link` (title "Link the default account's global rules to other accounts"): calls `linkGlobalRules` for every registered non-default account directory of this page, sharing the default account's `CLAUDE.md` / `AGENTS.md` through symlinks; one notification summarizes the result: "Linked N account(s)", "M account(s) already linked", "X, Y kept their own CLAUDE.md; merge manually, delete that file, then sync again", "Link failed: …"; with no other accounts: "No other accounts need CLAUDE.md synced." (`AGENTS.md` on the Codex page). The "Tools" row is shown on the Codex page even while Codex switching is not enabled.
 - Command Palette entries (category "AI Account Switcher"): `aiSwitcher.tools.openClaudeMd` (open the global CLAUDE.md), `aiSwitcher.tools.openAgentsMd` (open the global AGENTS.md), `aiSwitcher.tools.openSettings` (open extension settings, first a QuickPick Claude Code / Codex), `aiSwitcher.tools.reloadWindow` (reload window), `aiSwitcher.tools.restartExtHost` (restart extension host), `aiSwitcher.tools.cliVersions` (show CLI and extension versions; the Command Palette entry uses a read-only QuickPick list instead of the panel card), `aiSwitcher.tools.syncRules` (sync global rules to other accounts, first a QuickPick Claude Code (CLAUDE.md) / Codex (AGENTS.md)); restarting the WSL server reuses `aiSwitcher.codex.restartServer`.
@@ -264,7 +265,7 @@ The copy happens only once; afterwards each directory's `settings.json` is indep
 
 ## 6. Refresh triggers
 
-Location of the account info file: usually `<dir>/.claude.json`; for the default account without `CLAUDE_CONFIG_DIR` it is `~/.claude.json`. `.claude.json` below always means this file.
+Location of the account info file: usually `<dir>/.claude.json`; for the default account without `CLAUDE_CONFIG_DIR` (neither in the extension host environment nor set explicitly to `~/.claude` in `claudeCode.environmentVariables`) it is `~/.claude.json`. `.claude.json` below always means this file.
 
 The panel and the status bar refresh when:
 
@@ -316,7 +317,7 @@ If the Codex part fails to initialize on activation (e.g. an rc file is unreadab
 | `default` | `~/.codex` (fixed, ignores environment variables) | Always exists, cannot be removed; effective when the state file is empty |
 | `<name>` | `~/.codex-<name>` | Created with "Add account", or registered by auto-discovery (same rules as section 5, basename matches `^\.codex-[A-Za-z0-9_-]+$`) |
 
-- The account list is stored in `globalState` `codex.accounts`, the ignore list in `codex.ignoredDirs`, with the same semantics as on the Claude side.
+- The account list is stored in `globalState` `codex.accounts`, the ignore list in `codex.ignoredDirs`, with the same semantics as on the Claude side (auto-discovery also skips a name equal to the display name of an existing Codex account; a deleted directory leaves the ignore list).
 - The **selected account** is whatever the state file `~/.config/ai-switcher/codex-home` says (content is the absolute path of the directory, empty means the default account; shared across windows, the last writer wins).
 - The **directory effective in this window** = the extension host's own `process.env.CODEX_HOME`, or `~/.codex` when empty. The panel marks it as "current". When the effective directory does not correspond to any registered account, an "External directory" row is appended to the list and marked current.
 - Signed-in state: whether `<dir>/auth.json` exists.
@@ -375,6 +376,8 @@ Seven commands appear in the Command Palette in the category "Codex Account" ("C
 
 ### 10.6 Switch
 
+While another switch is in progress (e.g. its confirmation is still open), a further switch request (such as a double click) is ignored.
+
 1. The target is both the directory effective in this window and the content of the state file → "X is already the current account." and return.
 2. The target directory does not exist → error "Account directory does not exist: <dir>".
 3. Detect the editor kind from the WSL server's data directory directly under `~` (whitelist): `~/.antigravity-ide-server` or `~/.antigravity-server` (older releases) → Antigravity, `~/.vscodium-server` → VSCodium (both restart automatically); `~/.vscode-server` → VS Code, anything else or a detection failure → unknown (both manual only). Modal confirmation, button **Continue**:
@@ -388,7 +391,7 @@ Seven commands appear in the Command Palette in the category "Codex Account" ("C
 
 1. Name validation as in 4.2 (`^[A-Za-z0-9_-]+$`, not `default`, not equal to the account name or display name of any account on the Codex page, `~/.codex-<name>` not equal to `~/.codex` after resolving symlinks).
 2. Create `~/.codex-<name>` (0700; reused if it exists).
-3. Copy `config.toml` from `~/.codex` (skipped when the target exists or the source does not; mode 0600); then symlink `AGENTS.md` to `~/.codex/AGENTS.md` (the default file is created empty first if missing; an own file already there is kept; a link failure only shows "Account X was created, but linking the global AGENTS.md failed: …" and does not block). `config.toml` is not copied when it contains one of the top-level keys `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider` (comment lines ignored; keys after entering any table are not top-level) or a `[model_providers.` section. Nothing else is copied.
+3. Copy `config.toml` from `~/.codex` (skipped when the target exists or the source does not; mode 0600); then symlink `AGENTS.md` to `~/.codex/AGENTS.md` (the default file is created empty first if missing; an own file already there is kept; a link failure only shows "Account X was created, but linking the global AGENTS.md failed: …" and does not block). `config.toml` is not copied when it contains one of the top-level keys `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`, or `model_providers` in any form (a `[model_providers]` / `[model_providers.x]` table, a dotted key `model_providers.x.base_url = …`, an inline table `model_providers = { … }`); quoted keys and whitespace around dots are recognized (`"model_provider" = …`, `[ model_providers.x ]`), a dotted key or table header counts when its first segment is blocked, comment lines are ignored, and keys after entering any other table are not top-level. Nothing else is copied.
 4. **A message is shown only when a file was not copied because of a blocked key/section**: "Account X was created; the following files were not copied: …"; a missing source, an existing target and similar cases are silent.
 5. When creating the directory or copying fails, the help line shows "Failed to create account directory: <reason>" and nothing is registered.
 6. Register the account (removing it from the ignore list), refresh the view.
@@ -405,7 +408,7 @@ Seven commands appear in the Command Palette in the category "Codex Account" ("C
   3. not equal to the default directory (neither directly nor after resolving symlinks);
   4. `lstat` says it is not a symlink and is a directory;
   5. **no live daemon**: read `daemon.pid`, `app-server.pid`, `daemon-updater.pid`, `app-server-updater.pid` under `<dir>/app-server-daemon/` (whichever exist); the content is JSON; take `pid` and `processIdentity.startTicks` (or `processStartTime` when missing) and compare with the start time in `/proc/<pid>/stat` (field 22); a match means the daemon is alive and deletion is refused; a missing file or parse failure counts as not alive.
-- When the checks pass, it is deleted with Node's `fs.rm(dir, { recursive: true, force: true })`, never through a shell.
+- When the checks pass, it is deleted with Node's `fs.rm(dir, { recursive: true, force: true })`, never through a shell, and removed from `codex.ignoredDirs` again (a directory recreated later with the same name is auto-discovered).
 
 ### 10.9 Terminal
 
@@ -441,7 +444,8 @@ fi
 
 - In `~/.bashrc` it is inserted before the interactive guard (the `case $- in` line) with a blank line added before the block; if no guard is found it is appended at the end. In `~/.profile` it is appended at the end. The files keep their original permissions; a missing file is created with 0644. The rc files are written atomically.
 - When the state file is empty or the directory does not exist, the block runs `unset`, so after switching back to the default account new terminals do not inherit the old value cached by the server. Once enabled, this extension owns `CODEX_HOME` exclusively.
-- Removal deletes everything from the start marker to the end marker (including the marker lines) and the blank line added on installation; when the end marker is missing an error is thrown and the file is not changed.
+- Appending at the end adds a blank line before the block when the file ends with a newline, and only the missing newline otherwise.
+- Removal deletes everything from the start marker to the end marker (including the marker lines) and the blank line (or newline) added on installation, so install + remove restores the original bytes of a file that existed before (a file created by enabling is left empty); when the end marker is missing in either file an error is thrown and neither file is changed.
 - "Enabled" for the Codex page = both files have the marker block.
 
 ## 11. Language

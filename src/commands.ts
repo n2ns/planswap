@@ -11,8 +11,9 @@ import {
   linkGlobalRules,
   readAccountInfo,
   samePath,
+  sameRealPath,
 } from './paths';
-import { currentDir, setConfigDir } from './claudeSettings';
+import { currentDir, isExplicitConfigDir, setConfigDir } from './claudeSettings';
 import type { AccountStore } from './accounts';
 import type { AccountsPanel } from './accountsPanel';
 import type { StatusBar } from './statusBar';
@@ -28,7 +29,7 @@ export interface Deps {
   statusBar: StatusBar;
   labels: LabelStore;
   // Codex-side store; the refresh command applies to both tabs
-  codex?: { store: CodexAccountStore };
+  codex?: { store: CodexAccountStore; labels: LabelStore };
   tools: ToolDeps;
 }
 
@@ -55,7 +56,7 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     const picked = await vscode.window.showQuickPick(
       accounts.map((account) => ({
         label: labelOf(account),
-        description: readAccountInfo(account.dir).email ?? t('common.notLoggedIn'),
+        description: readAccountInfo(account.dir, isExplicitConfigDir(account.dir)).email ?? t('common.notLoggedIn'),
         detail: account.dir,
         account,
       })),
@@ -70,7 +71,7 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     if (name === DEFAULT_NAME) return t('name.reserved', { name: DEFAULT_NAME });
     if (store.find(name)) return t('name.exists');
     if (store.all().some((a) => labelOf(a) === name)) return t('name.dupLabel');
-    if (samePath(accountDir(name), defaultDir())) return t('name.sameAsDefaultDir');
+    if (sameRealPath(accountDir(name), defaultDir())) return t('name.sameAsDefaultDir');
     return undefined;
   }
 
@@ -148,6 +149,8 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
       if (ok !== deleteLabel) return;
     }
 
+    // Capture the display name before its alias is cleared, so the prompt below still shows it
+    const label = labelOf(account);
     await store.remove(account.name);
     await labels.remove(account.name);
     refreshUi();
@@ -155,13 +158,15 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     const detail = t('claude.removeDirDetail');
     const deleteDirLabel = t('common.deleteDir');
     const delDir = await vscode.window.showWarningMessage(
-      t('account.removeDirPrompt', { label: labelOf(account), dir: account.dir }),
+      t('account.removeDirPrompt', { label, dir: account.dir }),
       { modal: true, detail },
       deleteDirLabel,
     );
     if (delDir !== deleteDirLabel) return;
     try {
       await deleteAccountDir(account.dir);
+      // The directory is gone; stop ignoring it so a recreated directory is auto-discovered again
+      await store.unignore(account.dir);
     } catch (err) {
       void vscode.window.showErrorMessage(t('account.deleteDirFailed', { error: errText(err) }));
     }
@@ -233,8 +238,8 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
       if (a) openTerminal(a);
     }),
     vscode.commands.registerCommand('aiSwitcher.refresh', async () => {
-      await store.syncWithDisk();
-      if (codex) await codex.store.syncWithDisk();
+      await store.syncWithDisk(labels);
+      if (codex) await codex.store.syncWithDisk(codex.labels);
       refreshUi();
     }),
     vscode.window.onDidCloseTerminal((terminal) => {
@@ -242,7 +247,12 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
       if (!account) return;
       terminals.delete(terminal);
       refreshUi();
-      if (account.name !== DEFAULT_NAME && !readAccountInfo(account.dir).email) {
+      // Same sign-in state as the panel rows; never for the default or external-directory row
+      if (
+        account.name !== DEFAULT_NAME &&
+        account.name !== EXTERNAL_NAME &&
+        !readAccountInfo(account.dir, isExplicitConfigDir(account.dir)).loggedIn
+      ) {
         void vscode.window.showWarningMessage(
           t('claude.loginNotLanded', { dir: account.dir }),
         );

@@ -19,20 +19,20 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     return;
   }
   const store = new AccountStore(ctx.globalState);
-  await store.syncWithDisk();
   const claudeLabels = new LabelStore(ctx.globalState, 'claude.labels', 'claude.defaultLabel');
+  await store.syncWithDisk(claudeLabels);
   const codexLabels = new LabelStore(ctx.globalState, 'codex.labels', 'codex.defaultLabel');
   const statusBar = new StatusBar(store, claudeLabels);
 
   // A Codex init failure is only logged and does not affect Claude: the Codex tab renders as "not enabled, no accounts"
-  let codex: { store: CodexAccountStore } | undefined;
+  let codex: { store: CodexAccountStore; labels: LabelStore } | undefined;
   let codexSource: PanelSource = { accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] };
   let codexInitError: string | undefined;
   try {
     const codexStore = new CodexAccountStore(ctx.globalState);
-    await codexStore.syncWithDisk();
+    await codexStore.syncWithDisk(codexLabels);
     codexSource = codexPanelSource(codexStore, codexLabels);
-    codex = { store: codexStore };
+    codex = { store: codexStore, labels: codexLabels };
   } catch (err) {
     codexInitError = err instanceof Error ? err.message : String(err);
     console.error('[ai-switcher] Codex initialization failed:', err);

@@ -51,9 +51,9 @@ export function defaultDir(): string;                 // path.resolve(process.en
 export function accountDir(name: string): string;     // path.resolve(os.homedir(), '.claude-' + name)
 export function samePath(a: string, b: string): boolean; // strictly equal after path.resolve
 export function sameRealPath(a: string, b: string): boolean; // compares after resolving symlinks; falls back to path.resolve when a path does not exist
-export function claudeJsonPath(dir: string): string;  // account info file: ~/.claude.json when process.env.CLAUDE_CONFIG_DIR is not set and dir is ~/.claude, otherwise <dir>/.claude.json
+export function claudeJsonPath(dir: string, explicit?: boolean): string;  // account info file: ~/.claude.json when explicit is false (default), process.env.CLAUDE_CONFIG_DIR is not set and dir is ~/.claude, otherwise <dir>/.claude.json; callers pass explicit = claudeSettings.isExplicitConfigDir(dir)
 export function formatClaudePlan(orgType?: string, tier?: string): string | undefined; // organizationType → name (claude_max→Max, claude_pro→Pro, claude_team/team→Team, claude_enterprise/enterprise→Enterprise, others lose the claude_ prefix and are capitalized); a trailing /_(\d+)x$/ of tier → "<n>x"; both combined as "Max 20x", only one → only that one, both empty → undefined
-export function readAccountInfo(dir: string): AccountInfo; // synchronous; reads oauthAccount from claudeJsonPath(dir): email = emailAddress, plan = formatClaudePlan(organizationType, organizationRateLimitTier); never throws on parse failure / missing file; loggedIn = has email || <dir>/.credentials.json exists (email is the primary criterion)
+export function readAccountInfo(dir: string, explicit?: boolean): AccountInfo; // synchronous; reads oauthAccount from claudeJsonPath(dir, explicit): email = emailAddress, plan = formatClaudePlan(organizationType, organizationRateLimitTier); never throws on parse failure / missing file; loggedIn = has email || <dir>/.credentials.json exists (email is the primary criterion)
 export function scanAccountDirs(): Account[];          // scans real directories (not symlinks) under os.homedir() whose basename matches DIR_BASENAME_RE, excluding sameRealPath(defaultDir()); name = basename without '.claude-'
 export function copySettingsStripped(fromDir: string, toDir: string): boolean; // see design.md 6.2 step 5; returns false when the source is missing or the target already has settings.json; writes with mode 0o600
 export function ensureAccountDir(dir: string): void;   // mkdir recursive, mode 0o700
@@ -69,6 +69,7 @@ export async function deleteAccountDir(dir: string): Promise<void>; // checkSafe
 ```ts
 
 export function currentDir(): string;                         // CLAUDE_CONFIG_DIR from the setting (array and object forms accepted, empty string counts as missing) ?? defaultDir()
+export function isExplicitConfigDir(dir: string): boolean;   // true when the setting has a non-empty CLAUDE_CONFIG_DIR and it is samePath(dir); passed as `explicit` to claudeJsonPath / readAccountInfo by every caller that reads or watches account info (panel rows and watchers, status bar, QuickPick, terminal close)
 export async function setConfigDir(dir: string | undefined): Promise<void>; // builds a new array (never mutates the get() result), keeps other entries, removes all CLAUDE_CONFIG_DIR entries; appends {name, value: path.resolve(dir)} when dir is defined and not samePath(defaultDir()); object form converted to an array; await update(..., ConfigurationTarget.Global). Errors are rethrown as is
 export function affectsSetting(e: vscode.ConfigurationChangeEvent): boolean; // e.affectsConfiguration('claudeCode.environmentVariables')
 ```
@@ -85,7 +86,8 @@ export class AccountStore {
   findByDir(dir: string): Account | undefined; // samePath match in all()
   add(account: Account): Promise<void>;       // also removes the directory from globalState 'ignoredDirs'
   remove(name: string): Promise<void>;        // also records the directory in 'ignoredDirs'
-  syncWithDisk(): Promise<void>;       // adds entries of scanAccountDirs() that are not registered and not in 'ignoredDirs'
+  unignore(dir: string): Promise<void>;       // removes the directory from 'ignoredDirs'; called after deleteAccountDir succeeds
+  syncWithDisk(labels?: LabelStore): Promise<void>; // adds entries of scanAccountDirs() that are not registered and not in 'ignoredDirs'; with labels, also skips scanned names equal to labelFor(a.name, labels) of any account in all() (until that alias changes)
 }
 ```
 
@@ -98,7 +100,8 @@ export class LabelStore {
   constructor(state: vscode.Memento, key: 'claude.labels' | 'codex.labels', legacyKey: 'claude.defaultLabel' | 'codex.defaultLabel');
   // storage: globalState[key] is Record<string /*name*/, string /*label*/>, keyed by account name;
   // on first read, if key does not exist and legacyKey has a value, migrate it to { default: <old value> } and delete legacyKey
-  get(name: string): string | undefined;                       // undefined when not set
+  get(name: string): string | undefined;                       // undefined when not set; own properties only (Object.hasOwn), so names such as constructor / toString / __proto__ are safe
+  // set rebuilds the record with Object.fromEntries so a __proto__ name is stored as an ordinary own key (survives the JSON round-trip)
   set(name: string, label: string | undefined): Promise<void>; // undefined / empty / equal to name → delete the entry
   remove(name: string): Promise<void>;                         // called when an account is removed, equivalent to set(name, undefined)
   validate(label: string, name: string, existing: Array<{ name: string; label: string }>): string | undefined;
@@ -171,7 +174,7 @@ export interface PanelSource {
   accounts(): AccountView[];      // each implementation handles the external-directory row itself; label / email / plan already filled in
   enabled(): boolean;
   pendingDir(): string | undefined;   // display name
-  watchTargets(): string[];       // absolute paths of the files to watch (claude: claudeJsonPath of each directory; codex: auth.json of each directory + the state file)
+  watchTargets(): string[];       // absolute paths of the files to watch (claude: claudeJsonPath(dir, isExplicitConfigDir(dir)) of each directory; codex: auth.json of each directory + the state file)
 }
 export function claudePanelSource(store: AccountStore, labels: LabelStore): PanelSource; // maps store.all() (label via labelFor(name, labels), email/plan via readAccountInfo); when currentDir() does not correspond to any account, appends a current row with kind='external' (name EXTERNAL_NAME, label labelFor(EXTERNAL_NAME, labels)); enabled always true; pendingDir always undefined
 export function tildify(dir: string): string;  // replaces the home directory with ~
@@ -220,7 +223,7 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 - Page structure: `#app` (scrollable, container query `panel`) contains the tab bar + two `.page` elements (each with `.page-top`: banner / disabled card / account list; `.page-tools`: "Tools" row; `.add`: add section); outside `#app` follow the version card `.versions` (hidden by default) and the pinned footer toolbar `.tools`.
 - Per-page "Tools" row: three `vscode-button`s (secondary, icon and text): `symbol-ruler` + `CLAUDE.md`/`AGENTS.md` (title "Open global CLAUDE.md"/"Open global AGENTS.md") → `tool: 'openGlobalMd'`; `settings-gear` + "Settings" (title "Open Claude Code extension settings"/"Open Codex extension settings") → `'openSettings'`; `link` + "Sync rules" (title "Link the default account's global rules to other accounts") → `'syncRules'`. Messages carry the page's `mode`; shown on the Codex page even while it is not enabled.
 - Pinned footer toolbar: four `vscode-toolbar-button`s, left to right `info` "Show CLI and extension versions" → `'cliVersions'`, `refresh` "Reload Window" → `'reloadWindow'`, `debug-restart` "Restart Extension Host" → `'restartExtHost'`, `server-process` "Restart WSL Server" → `'restartServer'`; `mode` is the current tab.
-- Version card: on `versions`, if the card is expanded it collapses, otherwise it is filled with the title "CLI and extension versions" + close button and the `items` (each `.version-item`: `.version-label` on one line, `.version-value` on the next) and shown; the close button hides the card. Item labels come from the host (localized there).
+- Version card: on `versions`, if the card is expanded it collapses, otherwise it is filled with the title "CLI and extension versions" + close button and the `items` (each `.version-item`: `.version-label` on one line, `.version-value` on the next) and shown; the close button hides the card. Item labels come from the host (localized there); when `state.locale` changes while the card is expanded, the frontend sends `tool: 'cliVersions'` again and replaces the items with the next `versions` instead of collapsing.
 - Account row rendering: the current row is always first; 20px avatar (the default row has a `home` badge, title "Default account"); at the right end of the name line the current row has a 16px check-mark badge (`current-icon`, title "Current account", not in edit state); email line ("Logged in" when there is no email but `loggedIn`, nothing when signed out); the current row has an extra `dirLabel` line; `.row-foot` holds the tag group (plan pill + "Not logged in" pill) and the button group; the `li` has `data-plan` (the frontend maps the `plan` text and `mode` to `none` / `apikey` / `team` / `enterprise` / `tier0` / `tier1` / `tier2` / `tier3`); rows, names, emails, directories and plan pills have no `title`. Non-current rows that are not in edit state get `tabindex=0`; double-click or Enter sends `switch`.
 - It only renders and exchanges messages; business logic and validation are authoritative on the extension side; frontend validation (`NAME_RE`, the reserved name `default`, clashes with `name` or `label` of the page's `accounts`) is only an immediate hint.
 - All text is written through `textContent`, never by concatenating HTML. Rows show `label` (not `name`), `email` and `plan`.
@@ -246,7 +249,7 @@ export interface Deps {
   panel: AccountsPanel;
   statusBar: StatusBar;
   labels: LabelStore;                    // claude.labels (legacy key claude.defaultLabel migrated automatically)
-  codex?: { store: CodexAccountStore };  // the refresh command acts on both pages
+  codex?: { store: CodexAccountStore; labels: LabelStore };  // the refresh command acts on both pages; labels is codex.labels (for syncWithDisk)
   tools: ToolDeps;                       // panel tool messages are passed to runTool('claude', tool, tools)
 }
 export function registerCommands(deps: Deps): vscode.Disposable[];
@@ -257,16 +260,16 @@ export function shQuote(s: string): string;
   - `addAccount`: only calls `panel.focusAdd('claude')`;
   - `removeAccount`: QuickPick of `store.named()`, then remove (with modal confirmation);
   - `openTerminal`: QuickPick of `store.all()`, plus the directory when the current one is external;
-  - `refresh`: `await store.syncWithDisk()` (and `codex.store.syncWithDisk()`), then `panel.refresh()` + `statusBar.update()`.
+  - `refresh`: `await store.syncWithDisk(labels)` (and `codex.store.syncWithDisk(codex.labels)`), then `panel.refresh()` + `statusBar.update()`.
 - QuickPick items, messages and terminal names always use `labelFor(account.name, labels)`; logic still uses name / dir. All QuickPick texts and messages come from `t()`.
-- `validateName`: empty / does not match `NAME_RE` / equals `default` / clashes with `store.find(name)` ("An account with this name already exists") / equals `labelFor(a.name, labels)` of any account in `store.all()` ("Same as an existing account's display name") / `samePath(accountDir(name), defaultDir())`. Only checks Claude accounts. Messages come from `t()`.
+- `validateName`: empty / does not match `NAME_RE` / equals `default` / clashes with `store.find(name)` ("An account with this name already exists") / equals `labelFor(a.name, labels)` of any account in `store.all()` ("Same as an existing account's display name") / `sameRealPath(accountDir(name), defaultDir())`. Only checks Claude accounts. Messages come from `t()`.
 - Calls `panel.setHandler('claude', ...)` to handle panel messages: `switch`/`terminal`/`remove`/`rename` are first verified with `panel.resolve('claude', dir)`; `remove` only handles `kind === 'named'` and counts as confirmed (no first modal); `add` runs the add flow on the trimmed name and `panel.post({ type: 'addResult', mode: 'claude', error })`; `rename` only handles rows with `kind !== 'external'` → `labels.validate(label, account.name, store.all().map(a => ({ name: a.name, label: labelFor(a.name, labels) })))`; on error `post({ type: 'renameResult', mode, dir, error })`, otherwise `labels.set(account.name, <trimmed value>)` (deletes the entry when it equals `account.name`) → refresh the panel and the status bar → `post({ type: 'renameResult', mode, dir })`; `reload` runs `workbench.action.reloadWindow`; `dismissBanner` calls `panel.setSwitchedTo(undefined)`; `tool` calls `runTool('claude', msg.tool, tools)`.
 - Adding an account: `ensureAccountDir` → `copySettingsStripped(defaultDir(), dir)` (on failure returns "Failed to create account directory: <reason>") → `linkGlobalRules(dir)` (on failure only `showWarningMessage("Account X was created, but linking the global CLAUDE.md failed: …")`, not blocking) → `store.add` → refresh.
-- Removing an account also calls `labels.remove(name)` besides `store.remove(name)`.
+- Removing an account also calls `labels.remove(name)` besides `store.remove(name)`; the display name for the delete-directory prompt is captured before the alias is cleared. After `deleteAccountDir` succeeds, `store.unignore(dir)` is called.
 - After a successful switch, call `panel.setSwitchedTo(label)` and `statusBar.update()`; when `!panel.visible`, also show a notification with a "Reload Window" button.
 - The current account cannot be removed (refused with a hint to switch first); deleting the directory is always confirmed with a modal and only done through `deleteAccountDir`.
 - Behavior details in design.md section 6.
-- This module keeps its own set of "terminals created by this extension" and registers `onDidCloseTerminal`: on a match it calls `panel.refresh()` and `statusBar.update()`; this disposable is also in the returned array.
+- This module keeps its own set of "terminals created by this extension" and registers `onDidCloseTerminal`: on a match it calls `panel.refresh()` and `statusBar.update()`, and when the account is neither `default` nor `EXTERNAL_NAME` and `readAccountInfo(dir, isExplicitConfigDir(dir)).loggedIn` is false, shows the warning `t('claude.loginNotLanded', { dir })`; this disposable is also in the returned array.
 
 ## src/extension.ts
 
@@ -274,7 +277,7 @@ export function shQuote(s: string): string;
 export async function activate(ctx: vscode.ExtensionContext): Promise<void>;
 export function deactivate(): void;
 ```
-`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "AI Account Switcher only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `await store.syncWithDisk()` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels', 'claude.defaultLabel')`, `codexLabels = new LabelStore(ctx.globalState, 'codex.labels', 'codex.defaultLabel')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk` + `codexPanelSource(codexStore, codexLabels)`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `aiSwitcher.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
+`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "AI Account Switcher only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels', 'claude.defaultLabel')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(ctx.globalState, 'codex.labels', 'codex.defaultLabel')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `aiSwitcher.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
 
 ## src/tools.ts (tools: footer toolbar and per-page "Tools" row, 2026-09-26)
 
@@ -297,7 +300,7 @@ export function registerToolCommands(deps: ToolDeps): vscode.Disposable[];
 ```
 
 Tool behavior (all texts via `t()`):
-- `openGlobalMd`: claude → `<currentDir()>/CLAUDE.md`; codex → `<effectiveDir()>/AGENTS.md`. When the file does not exist, a modal asks "File does not exist. Create it?\n<path>" (button "Create"); on confirmation `writeFileSync(file, '', { mode: 0o600, flag: 'wx' })` and then `showTextDocument`; create / open failures → `showErrorMessage`.
+- `openGlobalMd`: claude → `<currentDir()>/CLAUDE.md`; codex → `<effectiveDir()>/AGENTS.md`. When the file does not exist, a modal asks "File does not exist. Create it?\n<target>" (button "Create"); on confirmation `writeFileSync(target, '', { mode: 0o600, flag: 'wx' })`, where `target` is the link target (resolved against the real path of the link's directory) when `file` is a dangling symlink to a file of the same name, otherwise `file`, and then `showTextDocument`; create / open failures → `showErrorMessage`.
 - `openSettings`: `workbench.action.openSettings` with the argument `claudeCode.` (claude) or `chatgpt.` (codex).
 - `reloadWindow`: `workbench.action.reloadWindow`, no confirmation.
 - `restartExtHost`: `workbench.action.restartExtensionHost`, no confirmation.

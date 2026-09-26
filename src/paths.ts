@@ -43,10 +43,11 @@ export function sameRealPath(a: string, b: string): boolean {
   return realPath(a) === realPath(b);
 }
 
-// Account info file location: without CLAUDE_CONFIG_DIR, Claude Code uses ~/.claude.json (in the home dir, not inside ~/.claude)
-export function claudeJsonPath(dir: string): string {
+// Account info file location: without CLAUDE_CONFIG_DIR, Claude Code uses ~/.claude.json (in the home dir, not inside ~/.claude).
+// explicit: CLAUDE_CONFIG_DIR is set to dir for the processes that use it (e.g. by the setting), so <dir>/.claude.json is used
+export function claudeJsonPath(dir: string, explicit = false): string {
   const home = os.homedir();
-  if (!process.env.CLAUDE_CONFIG_DIR?.trim() && samePath(dir, path.join(home, '.claude'))) return path.join(home, '.claude.json');
+  if (!explicit && !process.env.CLAUDE_CONFIG_DIR?.trim() && samePath(dir, path.join(home, '.claude'))) return path.join(home, '.claude.json');
   return path.join(dir, '.claude.json');
 }
 
@@ -79,11 +80,12 @@ function optString(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined;
 }
 
-export function readAccountInfo(dir: string): AccountInfo {
+// explicit: passed through to claudeJsonPath
+export function readAccountInfo(dir: string, explicit = false): AccountInfo {
   let email: string | undefined;
   let plan: string | undefined;
   try {
-    const data: unknown = JSON.parse(fs.readFileSync(claudeJsonPath(dir), 'utf8'));
+    const data: unknown = JSON.parse(fs.readFileSync(claudeJsonPath(dir, explicit), 'utf8'));
     const oauth = isPlainObject(data) ? data.oauthAccount : undefined;
     if (isPlainObject(oauth)) {
       email = optString(oauth.emailAddress);

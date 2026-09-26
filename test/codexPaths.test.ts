@@ -147,7 +147,43 @@ describe('copyCodexSeed', () => {
     const { src, dst } = fresh('model = "x"\n\n  [model_providers.mine]\nbase_url = "http://x"\n', 'x');
     const r = copyCodexSeed(src, dst);
     assert.equal(r.skipped[0].file, 'config.toml');
-    assert.equal(r.skipped[0].reason, 'Contains a [model_providers. section; not copied');
+    assert.equal(r.skipped[0].reason, 'Contains a [model_providers.mine] section; not copied');
+  });
+  for (const [label, cfg, reason] of [
+    ['top-level dotted key', 'model = "x"\nmodel_providers.x.base_url = "http://x"\n', 'Contains top-level key model_providers'],
+    ['spaced dotted key', ' model_providers . x . base_url="http://x"\n', 'Contains top-level key model_providers'],
+    ['spaced table header', 'model = "x"\n[ model_providers.x ]\nbase_url = "http://x"\n', 'Contains a [model_providers.x] section'],
+    ['spaced dots in header', '[model_providers . "my x"]\n', 'Contains a [model_providers.my x] section'],
+    ['quoted table header', '["model_providers".x]\n', 'Contains a [model_providers.x] section'],
+    ['[model_providers] header', '[model_providers]\nx = { base_url = "http://x" }\n', 'Contains a [model_providers] section'],
+    ['array of tables header', '[[model_providers]]\n', 'Contains a [model_providers] section'],
+    ['inline table', 'model_providers = { x = { base_url = "http://x" } }\n', 'Contains top-level key model_providers'],
+    ['double-quoted key', '"model_provider" = "x"\n', 'Contains top-level key model_provider'],
+    ['single-quoted key', "'model_provider' = 'x'\n", 'Contains top-level key model_provider'],
+    ['escaped quoted key', '"model\\u005fprovider" = "x"\n', 'Contains top-level key model_provider'],
+    ['dotted form of another key', 'log_dir.x = "/x"\n', 'Contains top-level key log_dir'],
+    ['table header of another key', '[sqlite_home]\n', 'Contains a [sqlite_home] section'],
+    ['after a multi-line nested array', 'a = [\n  [1, 2],\n]\nmodel_provider = "x"\n', 'Contains top-level key model_provider'],
+    ['after array lines that look like headers', 'a = [\n  ["x"],\n  [1]\n]\nmodel_providers.x.base_url = "u"\n', 'Contains top-level key model_providers'],
+    ['after a multi-line string with a header-like line', 'p = """\n[profiles]\n"""\nmodel_provider = "x"\n', 'Contains top-level key model_provider'],
+  ]) {
+    test(`blocks ${label}`, () => {
+      const { src, dst } = fresh(cfg, 'x');
+      const r = copyCodexSeed(src, dst);
+      assert.deepEqual(r.copied, []);
+      assert.deepEqual(r.skipped, [{ file: 'config.toml', reason: `${reason}; not copied` }]);
+      assert.ok(!fs.existsSync(path.join(dst, 'config.toml')));
+    });
+  }
+  test('forbidden names under other tables or as inner segments are not blocked', () => {
+    const a = fresh('[profiles.x]\nmodel_provider = "a"\nmodel_providers.y.base_url = "b"\n[profiles."model_providers"]\n', 'x');
+    assert.deepEqual(copyCodexSeed(a.src, a.dst).copied, ['config.toml']);
+    const b = fresh('profiles.model_provider = "a"\nprofiles = { x = { model_provider = "a" } }\n"model_providers_x" = 1\n', 'x');
+    assert.deepEqual(copyCodexSeed(b.src, b.dst).copied, ['config.toml']);
+  });
+  test('lines inside multi-line values are not read as keys or headers', () => {
+    const a = fresh("a = [\n  'model_provider = 1',\n]\nb = '''\n[model_providers.x]\n'''\nc = { d = [\n  1,\n] }\nmodel = \"y\"\n", 'x');
+    assert.deepEqual(copyCodexSeed(a.src, a.dst).copied, ['config.toml']);
   });
   test('comment lines and key-name prefixes are not false positives', () => {
     const a = fresh('# model_provider = "x"\n  # [model_providers.foo]\n#log_dir = "/x"\nmodel = "y"\n', 'x');

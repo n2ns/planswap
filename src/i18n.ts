@@ -70,7 +70,6 @@ export const en = {
     "Restart {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
   'codex.restartPlanFailed': 'Cannot restart the WSL server automatically: {error}\n{hint}',
   'codex.restartFailed': 'Failed to restart the WSL server: {error}\n{hint}',
-  'codex.rollbackMissingEnd': 'The marker block in {file} is missing its end marker; not rolled back. Please remove it manually',
   'codex.enableFailed': 'Cannot enable Codex account switching: {error}',
   'codex.enableFailedReasons': 'Cannot enable Codex account switching:\n{reasons}',
   'codex.enableConfirm':
@@ -221,7 +220,6 @@ export const zhCn: Record<MessageKey, string> = {
     '重启 {editor} 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
   'codex.restartPlanFailed': '无法自动重启 WSL 服务端：{error}\n{hint}',
   'codex.restartFailed': '重启 WSL 服务端失败：{error}\n{hint}',
-  'codex.rollbackMissingEnd': '{file} 中的标记块缺少结束标记，未回滚，请手动删除',
   'codex.enableFailed': '无法启用 Codex 账号切换：{error}',
   'codex.enableFailedReasons': '无法启用 Codex 账号切换：\n{reasons}',
   'codex.enableConfirm': '将在 ~/.profile 与 ~/.bashrc 中写入以下标记块，用于在登录 shell 中设置 CODEX_HOME。继续？',

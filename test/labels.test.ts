@@ -67,6 +67,48 @@ describe('LabelStore get/set/remove', () => {
   });
 });
 
+describe('names that are Object.prototype members', () => {
+  test('constructor / toString / __proto__ without an alias → undefined, labelFor returns the name', () => {
+    const { store } = make();
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      assert.equal(store.get(name), undefined, name);
+      assert.equal(labelFor(name, store), name);
+    }
+  });
+  test('aliases can be set, read and removed; stored as own keys', async () => {
+    const { memento, store } = make();
+    for (const name of ['constructor', 'toString', '__proto__']) await store.set(name, `alias-${name}`);
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      assert.equal(store.get(name), `alias-${name}`);
+      assert.equal(labelFor(name, store), `alias-${name}`);
+    }
+    const stored = memento.get<Record<string, string>>('claude.labels') ?? {};
+    assert.deepEqual(Object.keys(stored).sort(), ['__proto__', 'constructor', 'toString']);
+    assert.equal(Object.getPrototypeOf(stored), Object.prototype, '__proto__ must not replace the prototype');
+    await store.remove('__proto__');
+    await store.remove('constructor');
+    assert.equal(store.get('__proto__'), undefined);
+    assert.equal(store.get('constructor'), undefined);
+    assert.equal(store.get('toString'), 'alias-toString');
+  });
+  test('__proto__ alias survives the Memento JSON round-trip', async () => {
+    const { memento, store } = make();
+    await store.set('__proto__', 'p');
+    await store.set('a', 'x');
+    const reloaded = new MemoryMemento();
+    await reloaded.update('claude.labels', JSON.parse(JSON.stringify(memento.get('claude.labels'))));
+    const store2 = new LabelStore(reloaded, 'claude.labels', 'claude.defaultLabel');
+    assert.equal(store2.get('__proto__'), 'p');
+    assert.equal(store2.get('a'), 'x');
+    await store2.set('b', 'y');
+    assert.equal(store2.get('__proto__'), 'p', 'kept when another alias is written');
+  });
+  test('validate does not treat inherited members as existing labels', () => {
+    const { store } = make();
+    assert.equal(store.validate('constructor', 'default', [{ name: 'default', label: 'default' }]), undefined);
+  });
+});
+
 describe('legacy key migration', () => {
   test('first read migrates claude.defaultLabel to { default: <old value> } and deletes the old key', async () => {
     const memento = new MemoryMemento();

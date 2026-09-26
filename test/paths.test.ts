@@ -71,6 +71,11 @@ describe('defaultDir / accountDir / claudeJsonPath', () => {
     assert.equal(claudeJsonPath(def), path.join(def, '.claude.json'));
     delete process.env.CLAUDE_CONFIG_DIR;
   });
+  test('claudeJsonPath: explicit → always inside the dir, even for the default dir without the variable', () => {
+    assert.equal(claudeJsonPath(def, true), path.join(def, '.claude.json'));
+    assert.equal(claudeJsonPath(def, false), path.join(home, '.claude.json'));
+    assert.equal(claudeJsonPath(path.join(home, '.claude-a'), true), path.join(home, '.claude-a', '.claude.json'));
+  });
 });
 
 describe('readAccountInfo', () => {
@@ -113,6 +118,14 @@ describe('readAccountInfo', () => {
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'd@example.com' } }));
     assert.equal(readAccountInfo(def).email, 'd@example.com');
     fs.rmSync(path.join(home, '.claude.json'));
+  });
+  test('default directory with explicit → reads ~/.claude/.claude.json instead of ~/.claude.json', () => {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'home@example.com' } }));
+    fs.writeFileSync(path.join(def, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'inner@example.com' } }));
+    assert.equal(readAccountInfo(def, true).email, 'inner@example.com');
+    assert.equal(readAccountInfo(def).email, 'home@example.com');
+    fs.rmSync(path.join(home, '.claude.json'));
+    fs.rmSync(path.join(def, '.claude.json'));
   });
 });
 

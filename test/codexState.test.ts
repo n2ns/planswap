@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
 import {
   RC_BEGIN, RC_END, STATE_FILE, effectiveDir, installRcBlocks, preCheck, rcBlock, rcStatus, readSelectedDir,
-  removeRcBlocks, selfCheck, writeSelectedDir,
+  removeRcBlockFrom, removeRcBlocks, selfCheck, writeSelectedDir,
 } from '../src/codex/codexState';
 import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
 
@@ -140,16 +140,35 @@ describe('installRcBlocks / removeRcBlocks / rcStatus', () => {
       assert.equal(read(bashrc), orig);
     }
   });
-  test('appends without a guard; adds two newlines when the trailing one is missing; creates a missing file with 0644', () => {
+  test('appends without a guard; only the missing newline when the trailing one is missing; creates a missing file with 0644', () => {
     fs.writeFileSync(bashrc, 'export A=1');
     fs.rmSync(profile);
     installRcBlocks();
-    assert.equal(read(bashrc), 'export A=1\n\n' + rcBlock());
+    assert.equal(read(bashrc), 'export A=1\n' + rcBlock());
     assert.equal(read(profile), rcBlock());
     assert.equal(mode(profile), '644');
     removeRcBlocks();
-    assert.equal(read(bashrc), 'export A=1\n');
+    assert.equal(read(bashrc), 'export A=1');
     assert.equal(read(profile), '');
+  });
+  test('round trip restores the original bytes with or without a trailing newline', () => {
+    for (const [b, p] of [['x=1', 'p'], ['x=1\n', 'p\n'], ['x=1\n\n', 'p\n\n'], ['', ''], ['\n', '\n']]) {
+      fs.writeFileSync(bashrc, b);
+      fs.writeFileSync(profile, p);
+      installRcBlocks();
+      assert.deepEqual(rcStatus().map((s) => s.hasBlock), [true, true]);
+      removeRcBlocks();
+      assert.equal(read(bashrc), b, JSON.stringify(b));
+      assert.equal(read(profile), p, JSON.stringify(p));
+    }
+  });
+  test('removal after a CRLF conversion also drops the blank line added at install time', () => {
+    fs.writeFileSync(bashrc, 'x=1\n');
+    fs.writeFileSync(profile, 'p\n');
+    installRcBlocks();
+    fs.writeFileSync(profile, read(profile).replace(/\n/g, '\r\n'));
+    removeRcBlocks();
+    assert.equal(read(profile), 'p\r\n');
   });
   test('rcStatus: counts the user\'s own export, not the one inside the block', () => {
     fs.writeFileSync(bashrc, '  export CODEX_HOME=/x\n');
@@ -161,16 +180,52 @@ describe('installRcBlocks / removeRcBlocks / rcStatus', () => {
     fs.rmSync(profile);
     assert.deepEqual(rcStatus()[0], { file: profile, hasBlock: false, broken: false, hasUserExport: false });
   });
-  test('missing END: removeRcBlocks throws and leaves the file unchanged, the other file is still processed; both broken → messages combined', () => {
+  test('missing END: removeRcBlocks throws and changes neither file; both broken → messages combined', () => {
     const brokenText = 'a=1\n' + RC_BEGIN + '\nexport CODEX_HOME=/x\nb=2\n';
     fs.writeFileSync(bashrc, brokenText, { mode: 0o600 });
     fs.writeFileSync(profile, 'p=1\n\n' + rcBlock());
     assert.throws(() => removeRcBlocks(), { message: `Marker block is incomplete (missing end marker); please check ${bashrc} manually` });
     assert.equal(read(bashrc), brokenText);
-    assert.equal(read(profile), 'p=1\n');
+    assert.equal(read(profile), 'p=1\n\n' + rcBlock());
     assert.deepEqual(fs.readdirSync(home).filter((f) => f.endsWith('.tmp')), []);
     fs.writeFileSync(profile, RC_BEGIN + '\n');
     assert.throws(() => removeRcBlocks(), (e: unknown) => e instanceof Error && e.message.includes(bashrc) && e.message.includes(profile));
+  });
+  test('both installed, END removed from ~/.profile → throws and ~/.bashrc is unchanged byte for byte', () => {
+    fs.writeFileSync(bashrc, bashrcOrig);
+    fs.writeFileSync(profile, profileOrig);
+    installRcBlocks();
+    const b = read(bashrc);
+    const p = read(profile).replace(RC_END + '\n', '');
+    fs.writeFileSync(profile, p);
+    assert.throws(() => removeRcBlocks(), { message: `Marker block is incomplete (missing end marker); please check ${profile} manually` });
+    assert.equal(read(bashrc), b);
+    assert.equal(read(profile), p);
+  });
+  test('removeRcBlockFrom: single file, symlinked ~/.bashrc stays a symlink, target mode kept; missing END → throws unchanged', () => {
+    fs.rmSync(bashrc);
+    const realBashrc = path.join(home, 'dotfiles', 'bashrc');
+    fs.mkdirSync(path.dirname(realBashrc), { recursive: true });
+    fs.writeFileSync(realBashrc, bashrcOrig, { mode: 0o640 });
+    fs.symlinkSync(realBashrc, bashrc);
+    fs.writeFileSync(profile, profileOrig);
+    installRcBlocks();
+    const p = read(profile);
+    removeRcBlockFrom(bashrc);
+    assert.ok(fs.lstatSync(bashrc).isSymbolicLink());
+    assert.equal(read(realBashrc), bashrcOrig);
+    assert.equal(mode(realBashrc), '640');
+    assert.equal(read(profile), p, 'the other file is not touched');
+    assert.deepEqual(fs.readdirSync(path.dirname(realBashrc)), ['bashrc']);
+    removeRcBlockFrom(bashrc);
+    assert.equal(read(realBashrc), bashrcOrig);
+    const broken = 'a=1\n' + RC_BEGIN + '\n';
+    fs.writeFileSync(realBashrc, broken);
+    assert.throws(() => removeRcBlockFrom(bashrc), { message: `Marker block is incomplete (missing end marker); please check ${bashrc} manually` });
+    assert.equal(read(realBashrc), broken);
+    fs.unlinkSync(bashrc);
+    fs.rmSync(path.dirname(realBashrc), { recursive: true });
+    fs.writeFileSync(bashrc, 'x\n');
   });
   test('removes every marker block', () => {
     fs.writeFileSync(bashrc, 'a=1\n\n' + rcBlock() + 'mid\n\n' + rcBlock() + rcBlock() + 'z=9\n');

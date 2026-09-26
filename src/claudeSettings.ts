@@ -38,6 +38,12 @@ export function currentDir(): string {
   return getConfiguredConfigDir() ?? defaultDir();
 }
 
+/** Whether the setting sets CLAUDE_CONFIG_DIR (non-empty) to dir; then Claude Code reads <dir>/.claude.json even for ~/.claude */
+export function isExplicitConfigDir(dir: string): boolean {
+  const configured = getConfiguredConfigDir();
+  return configured !== undefined && samePath(configured, dir);
+}
+
 export async function setConfigDir(dir: string | undefined): Promise<void> {
   const config = vscode.workspace.getConfiguration(SECTION);
   const raw = config.get<unknown>(KEY);

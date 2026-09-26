@@ -17,15 +17,18 @@ export class LabelStore {
 
   /** Returns undefined when not set */
   get(name: string): string | undefined {
-    return this.read()[name] || undefined;
+    // Own properties only, so names like `constructor` / `toString` never resolve to Object.prototype members
+    const labels = this.read();
+    const value = Object.hasOwn(labels, name) ? labels[name] : undefined;
+    return typeof value === 'string' && value ? value : undefined;
   }
 
   /** undefined or equal to name → remove the entry */
   async set(name: string, label: string | undefined): Promise<void> {
-    const labels = { ...this.read() };
-    if (!label || label === name) delete labels[name];
-    else labels[name] = label;
-    await this.state.update(this.key, labels);
+    // Rebuilt with Object.fromEntries (define semantics) so a `__proto__` name is stored as a normal own key
+    const entries = Object.entries(this.read()).filter(([k]) => k !== name);
+    if (label && label !== name) entries.push([name, label]);
+    await this.state.update(this.key, Object.fromEntries(entries));
   }
 
   /** Called when an account is deleted */

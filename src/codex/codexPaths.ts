@@ -13,8 +13,9 @@ export interface CodexAccount { name: string; dir: string }
 const SEED_FILES = ['config.toml'];
 // Top-level keys in the seed config that must not be carried into a new account dir (design 8.2)
 const BLOCKED_TOP_KEYS = ['forced_login_method', 'forced_chatgpt_workspace_id', 'sqlite_home', 'log_dir', 'model_provider'];
-const BLOCKED_TOP_KEY_RE = new RegExp(`^(${BLOCKED_TOP_KEYS.join('|')})\\s*=`);
-const BLOCKED_SECTION_PREFIX = '[model_providers.';
+// Table that must not be carried over in any form ([model_providers], [model_providers.x], dotted keys, inline tables)
+const BLOCKED_TABLE = 'model_providers';
+const BLOCKED_ROOTS = [...BLOCKED_TOP_KEYS, BLOCKED_TABLE];
 const DAEMON_PID_FILES = ['daemon.pid', 'app-server.pid', 'daemon-updater.pid', 'app-server-updater.pid'];
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -122,21 +123,97 @@ export function linkGlobalRules(dir: string): RulesLinkResult {
 
 export interface CopyResult { copied: string[]; skipped: Array<{ file: string; reason: string }> }
 
-// Returns a description of the blocked item found in config.toml, or undefined if none
+/**
+ * Parses a TOML key at the start of s: bare, "basic" or 'literal' segments joined by dots, whitespace allowed
+ * around the dots. Returns the unquoted segments and the rest of the line, or undefined when s does not start with a key.
+ */
+function parseTomlKey(s: string): { segments: string[]; rest: string } | undefined {
+  const segments: string[] = [];
+  let rest = s;
+  for (;;) {
+    rest = rest.trimStart();
+    let m: RegExpExecArray | null;
+    if ((m = /^[A-Za-z0-9_-]+/.exec(rest))) {
+      segments.push(m[0]);
+    } else if ((m = /^"((?:[^"\\]|\\.)*)"/.exec(rest))) {
+      let value = m[1];
+      try { value = JSON.parse(m[0]) as string; } catch { /* keep the raw text for TOML-only escapes */ }
+      segments.push(value);
+    } else if ((m = /^'([^']*)'/.exec(rest))) {
+      segments.push(m[1]);
+    } else {
+      return undefined;
+    }
+    rest = rest.slice(m[0].length).trimStart();
+    if (!rest.startsWith('.')) return { segments, rest };
+    rest = rest.slice(1);
+  }
+}
+
+// State of a value that continues on the next lines: open [ / { nesting and an open """ / ''' string
+interface ValueState { depth: number; ml?: string }
+
+// Walks one line of a value (after '=' or a continuation line), updating the nesting and multi-line string state
+function scanValue(s: string, st: ValueState): void {
+  let i = 0;
+  while (i < s.length) {
+    if (st.ml) {
+      const end = s.indexOf(st.ml, i);
+      if (end < 0) return;
+      i = end + 3;
+      st.ml = undefined;
+      continue;
+    }
+    const c = s[i];
+    if (c === '#') return;
+    if (s.startsWith('"""', i) || s.startsWith("'''", i)) {
+      st.ml = s.slice(i, i + 3);
+      i += 3;
+    } else if (c === '"') {
+      const m = /^"(?:[^"\\]|\\.)*"/.exec(s.slice(i));
+      i += m ? m[0].length : s.length;
+    } else if (c === "'") {
+      const end = s.indexOf("'", i + 1);
+      i = end < 0 ? s.length : end + 1;
+    } else {
+      if (c === '[' || c === '{') st.depth++;
+      else if ((c === ']' || c === '}') && st.depth > 0) st.depth--;
+      i++;
+    }
+  }
+}
+
+// Returns a description of the blocked item found in config.toml, or undefined if none. Line-based scan: a table
+// header whose first segment is blocked, or a top-level key (plain, quoted, dotted or inline table) whose first
+// segment is blocked; keys after any other table header are not top-level. Lines inside a multi-line value
+// (array, inline table, """ or ''' string) are skipped, so they are never read as keys or headers.
 function blockedConfigReason(text: string): string | undefined {
   let topLevel = true;
+  const st: ValueState = { depth: 0 };
   for (const raw of text.split(/\r?\n/)) {
+    if (st.depth > 0 || st.ml) {
+      scanValue(raw, st);
+      continue;
+    }
     const line = raw.trimStart();
     if (line === '' || line.startsWith('#')) continue;
     if (line.startsWith('[')) {
-      if (line.startsWith(BLOCKED_SECTION_PREFIX)) return t('codex.seed.hasSection', { section: BLOCKED_SECTION_PREFIX });
+      // [table] or [[array of tables]]
+      const header = parseTomlKey(line.slice(line.startsWith('[[') ? 2 : 1));
+      if (!header || !header.rest.startsWith(']')) continue;
+      if (BLOCKED_ROOTS.includes(header.segments[0])) {
+        return t('codex.seed.hasSection', { section: `[${header.segments.join('.')}]` });
+      }
       // Keys after any table header are not top-level
       topLevel = false;
       continue;
     }
-    if (!topLevel) continue;
-    const m = BLOCKED_TOP_KEY_RE.exec(line);
-    if (m) return t('codex.seed.hasTopKey', { key: m[1] });
+    const key = parseTomlKey(line);
+    if (!key || !key.rest.startsWith('=')) continue;
+    if (topLevel && BLOCKED_ROOTS.includes(key.segments[0])) {
+      return t('codex.seed.hasTopKey', { key: key.segments[0] });
+    }
+    scanValue(key.rest.slice(1), st);
   }
   return undefined;
 }

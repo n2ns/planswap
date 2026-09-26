@@ -19,8 +19,6 @@ import {
   linkGlobalRules,
 } from './codexPaths';
 import {
-  RC_BEGIN,
-  RC_END,
   STATE_FILE,
   effectiveDir,
   installRcBlocks,
@@ -28,6 +26,7 @@ import {
   rcBlock,
   rcStatus,
   readSelectedDir,
+  removeRcBlockFrom,
   removeRcBlocks,
   selfCheck,
   writeSelectedDir,
@@ -38,44 +37,6 @@ import { runTool, type ToolDeps } from '../tools';
 import { t } from '../i18n';
 
 export interface CodexDeps { store: CodexAccountStore; panel: AccountsPanel; labels: LabelStore; tools: ToolDeps }
-
-/**
- * Removes this extension's marker block from a single rc file (used by enable rollback, only for files newly written this time).
- * Same as codexState.removeFrom: also removes the blank line added before the block at install time and keeps permissions;
- * difference: when the END marker is missing it leaves the file untouched and throws; writes back via temp file + rename.
- */
-function removeRcBlockFrom(file: string): void {
-  let text: string;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw e;
-  }
-  const lines = text.split('\n');
-  const begin = lines.findIndex((l) => l.trim() === RC_BEGIN);
-  if (begin < 0) return;
-  const end = lines.findIndex((l, i) => i > begin && l.trim() === RC_END);
-  if (end < 0) throw new Error(t('codex.rollbackMissingEnd', { file }));
-  lines.splice(begin, end - begin + 1);
-  if (begin > 0 && lines[begin - 1] === '') lines.splice(begin - 1, 1);
-  const mode = fs.statSync(file).mode & 0o777;
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
-  const fd = fs.openSync(tmp, 'w', mode);
-  try {
-    fs.writeFileSync(fd, lines.join('\n'));
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
-    fs.chmodSync(tmp, mode);
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
-    throw e;
-  }
-}
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -187,6 +148,8 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
   const labelOf = (a: CodexAccount): string => labelFor(a.name, labels);
   const isEffective = (a: CodexAccount): boolean => samePath(a.dir, effectiveDir());
   const isSelected = (a: CodexAccount): boolean => samePath(a.dir, readSelectedDir() ?? codexDefaultDir());
+  // A switch is in progress (e.g. its modal is open); further requests such as a double click are ignored
+  let switching = false;
 
   async function pickAccount(accounts: CodexAccount[], placeHolder: string): Promise<CodexAccount | undefined> {
     if (accounts.length === 0) {
@@ -280,6 +243,16 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
   }
 
   async function switchTo(account: CodexAccount): Promise<void> {
+    if (switching) return;
+    switching = true;
+    try {
+      await doSwitch(account);
+    } finally {
+      switching = false;
+    }
+  }
+
+  async function doSwitch(account: CodexAccount): Promise<void> {
     if (isEffective(account) && isSelected(account)) {
       void vscode.window.showInformationMessage(t('account.alreadyCurrent', { label: labelOf(account) }));
       return;
@@ -379,6 +352,8 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
       if (ok !== deleteLabel) return;
     }
 
+    // Capture the alias before labels.remove clears it
+    const label = labelOf(account);
     await store.remove(account.name);
     await labels.remove(account.name);
     panel.refresh();
@@ -386,13 +361,14 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
     const detail = t('codex.removeDirDetail');
     const deleteDirLabel = t('common.deleteDir');
     const delDir = await vscode.window.showWarningMessage(
-      t('account.removeDirPrompt', { label: labelOf(account), dir: account.dir }),
+      t('account.removeDirPrompt', { label, dir: account.dir }),
       { modal: true, detail },
       deleteDirLabel,
     );
     if (delDir !== deleteDirLabel) return;
     try {
       await deleteCodexDir(account.dir);
+      await store.unignore(account.dir);
     } catch (err) {
       void vscode.window.showErrorMessage(t('account.deleteDirFailed', { error: errText(err) }));
     }

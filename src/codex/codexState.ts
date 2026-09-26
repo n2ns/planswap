@@ -206,7 +206,9 @@ function installInto(file: string, beforeGuard: boolean): void {
       return;
     }
   }
-  const sep = text === '' ? '' : text.endsWith('\n') ? '\n' : '\n\n';
+  // One newline: a file ending with a newline gets a blank line before the block, one without only gets the
+  // missing newline (no blank line), so removal can tell the two apart and restore the original bytes
+  const sep = text === '' ? '' : '\n';
   writeRc(file, text + sep + block, mode);
 }
 
@@ -215,10 +217,13 @@ export function installRcBlocks(): void {
   installInto(profilePath(), false);
 }
 
-/** Removes all marker blocks; if a BEGIN lacks an END, leaves the file untouched and throws. */
-function removeFrom(file: string): void {
+/**
+ * Returns the content with all marker blocks removed, or undefined when the file is missing or has no block;
+ * throws when a BEGIN lacks an END. Does not write.
+ */
+function withoutBlocks(file: string): string | undefined {
   const text = readText(file);
-  if (text === undefined) return;
+  if (text === undefined) return undefined;
   const lines = text.split('\n');
   let removed = false;
   for (;;) {
@@ -227,26 +232,42 @@ function removeFrom(file: string): void {
     const end = lines.findIndex((l, i) => i > begin && l.trim() === RC_END);
     if (end < 0) throw new Error(t('codex.rc.missingEnd', { file }));
     lines.splice(begin, end - begin + 1);
-    // Also remove the blank line added before the block at install time
-    if (begin > 0 && lines[begin - 1] === '') lines.splice(begin - 1, 1);
+    if (begin > 0 && (lines[begin - 1] === '' || lines[begin - 1] === '\r')) {
+      // Also remove the blank line added before the block at install time ('\r' after a CRLF conversion)
+      lines.splice(begin - 1, 1);
+    } else if (begin > 0 && begin === lines.length - 1 && lines[begin] === '') {
+      // Block appended at the end of a file without a trailing newline: drop the newline added at install time
+      lines.pop();
+    }
     removed = true;
   }
-  if (!removed) return;
-  const mode = statMode(file);
-  writeRc(file, lines.join('\n'), mode);
+  return removed ? lines.join('\n') : undefined;
 }
 
+/**
+ * Removes all marker blocks from a single rc file (used by the enable rollback); written through writeRc, so
+ * symlinks are followed and the mode is kept. If a BEGIN lacks an END, leaves the file untouched and throws.
+ */
+export function removeRcBlockFrom(file: string): void {
+  const content = withoutBlocks(file);
+  if (content !== undefined) writeRc(file, content, statMode(file));
+}
+
+/** Checks both files first; if any BEGIN lacks an END, throws (all errors combined) without changing either file. */
 export function removeRcBlocks(): void {
   const errors: Error[] = [];
+  const writes: Array<{ file: string; content: string }> = [];
   for (const file of [bashrcPath(), profilePath()]) {
     try {
-      removeFrom(file);
+      const content = withoutBlocks(file);
+      if (content !== undefined) writes.push({ file, content });
     } catch (e) {
       errors.push(e instanceof Error ? e : new Error(String(e)));
     }
   }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new Error(errors.map((e) => e.message).join(t('common.listSep')));
+  for (const { file, content } of writes) writeRc(file, content, statMode(file));
 }
 
 const STDERR_NOISE = ['cannot set terminal process group', 'no job control in this shell'];

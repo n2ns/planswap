@@ -96,11 +96,13 @@ function syncRules(mode: PanelMode, deps: ToolDeps): void {
 async function openGlobalMd(mode: PanelMode): Promise<void> {
   const file = mode === 'claude' ? path.join(currentDir(), 'CLAUDE.md') : path.join(effectiveDir(), 'AGENTS.md');
   if (!fs.existsSync(file)) {
+    // A dangling symlink (e.g. to a deleted default rules file): create its target so the link works again
+    const target = danglingLinkTarget(file) ?? file;
     const createLabel = t('tools.create');
-    const ok = await vscode.window.showInformationMessage(t('tools.fileMissingCreate', { file }), { modal: true }, createLabel);
+    const ok = await vscode.window.showInformationMessage(t('tools.fileMissingCreate', { file: target }), { modal: true }, createLabel);
     if (ok !== createLabel) return;
     try {
-      fs.writeFileSync(file, '', { mode: 0o600, flag: 'wx' });
+      fs.writeFileSync(target, '', { mode: 0o600, flag: 'wx' });
     } catch (err) {
       void vscode.window.showErrorMessage(t('tools.createFailed', { error: errText(err) }));
       return;
@@ -110,6 +112,18 @@ async function openGlobalMd(mode: PanelMode): Promise<void> {
     await vscode.window.showTextDocument(vscode.Uri.file(file));
   } catch (err) {
     void vscode.window.showErrorMessage(t('tools.openFailed', { error: errText(err) }));
+  }
+}
+
+// Target path of file when it is a symlink to a file of the same name (relative targets resolved against the link's
+// real directory, as the kernel does); undefined otherwise, so nothing but a rules file is ever created
+function danglingLinkTarget(file: string): string | undefined {
+  try {
+    if (!fs.lstatSync(file).isSymbolicLink()) return undefined;
+    const target = path.resolve(fs.realpathSync(path.dirname(file)), fs.readlinkSync(file));
+    return path.basename(target) === path.basename(file) ? target : undefined;
+  } catch {
+    return undefined;
   }
 }
 
