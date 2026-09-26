@@ -9,7 +9,7 @@
 ### Changed
 
 - Copying folders (creating an independent account, unlinking, moving files across file systems) no longer uses `fs.cpSync`, which terminated the extension host when a folder in the default directory could not be read; such a folder now produces an ordinary error message.
-- Terminology: what the UI called a "shared account" is now a **linked account** (链接账号); independent accounts are unchanged. The add checkbox reads **Link to the default account's settings and history**, the row button **Link to the default account: …**, the badge "Linked to the default account's settings, rules, skills, history and sessions", the Tools row button **Re-link** (重新链接) and the Command Palette command **Re-link Accounts to the Default Account** (`aiSwitcher.tools.sync`, id unchanged). Confirmations, warnings and summaries use the same wording (e.g. "Re-linked N linked Claude account(s) to the default account.", "not linked for safety").
+- Terminology: what the UI called a "shared account" is now a **linked account** (链接账号); independent accounts are unchanged. The add checkbox reads **Link to the default account's settings and history**, the row button **Link to the default account: …**, the badge "Linked to the default account's settings, rules, skills, history and sessions", the Tools row button **Re-link** (重新链接) and the Command Palette command **Re-link Accounts to the Default Account** (`planswap.tools.sync`). Confirmations, warnings and summaries use the same wording (e.g. "Re-linked N linked Claude account(s) to the default account.", "not linked for safety").
 
 ## [0.1.3] - 2026-09-27
 
@@ -24,7 +24,7 @@
 
 ### Changed
 
-- The Tools row's **Sync rules** button and the Command Palette command **Sync Global Rules to Other Accounts** are replaced by **Sync shared** and **Sync Shared Accounts with the Default Account** (`aiSwitcher.tools.sync`). They re-link every shared account of the vendor and leave independent accounts untouched.
+- The Tools row's **Sync rules** button and the Command Palette command **Sync Global Rules to Other Accounts** are replaced by **Sync shared** and **Sync Shared Accounts with the Default Account** (`planswap.tools.sync`). They re-link every shared account of the vendor and leave independent accounts untouched.
 - New accounts no longer link only `CLAUDE.md` / `AGENTS.md`. A shared account links all shared entries, and an independent account gets a copy of them.
 - Missing shared entries are created empty in `~/.claude` / `~/.codex` as link targets, and sharing an account moves its files there. Existing files of the default account are never overwritten.
 - The `default` account can no longer be renamed on either tab; it is always shown as `default`, and an alias set earlier is ignored.
@@ -83,4 +83,4 @@ Initial release. WSL/Linux only.
 - **Tools**: open the global rules file or extension settings, show CLI and extension versions, reload the window, restart the extension host or the WSL server.
 - **Auto-discovery** of existing `~/.claude-*` and `~/.codex-*` directories, and an "External directory" row when `CLAUDE_CONFIG_DIR` points to an unregistered directory.
 - **Status bar** item showing the current Claude account.
-- **English and Simplified Chinese UI** (`aiSwitcher.language`), switchable without reloading.
+- **English and Simplified Chinese UI** (`planswap.language`), switchable without reloading.

@@ -314,20 +314,20 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     store.findByDir(currentDir()) ? store.all() : [...store.all(), { name: EXTERNAL_NAME, dir: currentDir() }];
 
   return [
-    vscode.commands.registerCommand('aiSwitcher.switchAccount', async () => {
+    vscode.commands.registerCommand('planswap.switchAccount', async () => {
       const a = await pickAccount(store.all().filter((x) => !isCurrent(x)), t('claude.pick.switch'));
       if (a) await switchTo(a);
     }),
-    vscode.commands.registerCommand('aiSwitcher.addAccount', () => panel.focusAdd(MODE)),
-    vscode.commands.registerCommand('aiSwitcher.removeAccount', async () => {
+    vscode.commands.registerCommand('planswap.addAccount', () => panel.focusAdd(MODE)),
+    vscode.commands.registerCommand('planswap.removeAccount', async () => {
       const a = await pickAccount(store.named().filter((x) => !isCurrent(x)), t('claude.pick.remove'));
       if (a) await removeAccount(a, false);
     }),
-    vscode.commands.registerCommand('aiSwitcher.openTerminal', async () => {
+    vscode.commands.registerCommand('planswap.openTerminal', async () => {
       const a = await pickAccount(allWithExternal(), t('claude.pick.terminal'));
       if (a) openTerminal(a);
     }),
-    vscode.commands.registerCommand('aiSwitcher.refresh', async () => {
+    vscode.commands.registerCommand('planswap.refresh', async () => {
       await store.syncWithDisk(labels);
       if (codex) await codex.store.syncWithDisk(codex.labels);
       refreshUi();

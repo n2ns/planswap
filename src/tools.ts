@@ -193,12 +193,12 @@ async function showCliVersions(): Promise<void> {
   await vscode.window.showQuickPick(items, { canPickMany: false, placeHolder: t('tools.ver.placeholder') });
 }
 
-/** Command Palette entries; restarting the WSL server reuses aiSwitcher.codex.restartServer and is not registered here */
+/** Command Palette entries; restarting the WSL server reuses planswap.codex.restartServer and is not registered here */
 export function registerToolCommands(deps: ToolDeps): vscode.Disposable[] {
   return [
-    vscode.commands.registerCommand('aiSwitcher.tools.openClaudeMd', () => runTool('claude', 'openGlobalMd', deps)),
-    vscode.commands.registerCommand('aiSwitcher.tools.openAgentsMd', () => runTool('codex', 'openGlobalMd', deps)),
-    vscode.commands.registerCommand('aiSwitcher.tools.openSettings', async () => {
+    vscode.commands.registerCommand('planswap.tools.openClaudeMd', () => runTool('claude', 'openGlobalMd', deps)),
+    vscode.commands.registerCommand('planswap.tools.openAgentsMd', () => runTool('codex', 'openGlobalMd', deps)),
+    vscode.commands.registerCommand('planswap.tools.openSettings', async () => {
       const picked = await vscode.window.showQuickPick(
         [
           { label: 'Claude Code', mode: 'claude' as const },
@@ -208,10 +208,10 @@ export function registerToolCommands(deps: ToolDeps): vscode.Disposable[] {
       );
       if (picked) await runTool(picked.mode, 'openSettings', deps);
     }),
-    vscode.commands.registerCommand('aiSwitcher.tools.reloadWindow', () => runTool('claude', 'reloadWindow', deps)),
-    vscode.commands.registerCommand('aiSwitcher.tools.restartExtHost', () => runTool('claude', 'restartExtHost', deps)),
-    vscode.commands.registerCommand('aiSwitcher.tools.cliVersions', () => runTool('claude', 'cliVersions', { ...deps, postVersions: undefined })),
-    vscode.commands.registerCommand('aiSwitcher.tools.sync', async () => {
+    vscode.commands.registerCommand('planswap.tools.reloadWindow', () => runTool('claude', 'reloadWindow', deps)),
+    vscode.commands.registerCommand('planswap.tools.restartExtHost', () => runTool('claude', 'restartExtHost', deps)),
+    vscode.commands.registerCommand('planswap.tools.cliVersions', () => runTool('claude', 'cliVersions', { ...deps, postVersions: undefined })),
+    vscode.commands.registerCommand('planswap.tools.sync', async () => {
       const picked = await vscode.window.showQuickPick(
         [
           { label: 'Claude Code', mode: 'claude' as const },

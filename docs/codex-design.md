@@ -1,7 +1,7 @@
 # Codex Account Switching: Design
 
 Date: 2026-09-26
-Status: implemented (v8, 2026-09-26: shared and independent accounts (8.6): a shared account links everything except its login identity and memories to `~/.codex`, an independent one gets a one-time copy of its configuration; `AGENTS.md` is no longer linked on its own; the `default` account can no longer be renamed (only named accounts, 8.5); v7, 2026-09-26: the WSL server restart works per editor kind detected from a whitelist of server data directories: Antigravity and VSCodium restart automatically, VS Code and unrecognized editors only get manual instructions (section 5); v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `aiSwitcher.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
+Status: implemented (v8, 2026-09-26: shared and independent accounts (8.6): a shared account links everything except its login identity and memories to `~/.codex`, an independent one gets a one-time copy of its configuration; `AGENTS.md` is no longer linked on its own; the `default` account can no longer be renamed (only named accounts, 8.5); v7, 2026-09-26: the WSL server restart works per editor kind detected from a whitelist of server data directories: Antigravity and VSCodium restart automatically, VS Code and unrecognized editors only get manual instructions (section 5); v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `planswap.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
 
 ## 1. Goals and scope
 
@@ -47,7 +47,7 @@ The following facts about shared accounts come from codex-cli 0.157.1 (source an
 ```
 ~/.profile and ~/.bashrc each have a marker block: read CODEX_HOME from the state file and export / unset
 User clicks "Switch" on the Codex page
-  → the extension writes the target directory to the state file ~/.config/ai-switcher/codex-home (atomic write + fsync)
+  → the extension writes the target directory to the state file ~/.config/planswap/codex-home (atomic write + fsync)
   → the extension terminates the WSL-side server and its leftover children (section 5)
   → every WSL window shows "Cannot reconnect"; the user clicks "Reload Window"
   → the new server resolves the environment through a login shell; CODEX_HOME points to the new directory
@@ -63,34 +63,34 @@ An account is a directory:
 
 ## 4. Login shell configuration
 
-- State file: `~/.config/ai-switcher/codex-home`, content is the absolute path of the target directory, or empty (default account). Mode 0600, directory 0700, atomic write (temporary file + rename + directory fsync).
+- State file: `~/.config/planswap/codex-home`, content is the absolute path of the target directory, or empty (default account). Mode 0600, directory 0700, atomic write (temporary file + rename + directory fsync).
 - Content of the marker block, written in two places, `~/.profile` and `~/.bashrc` (login shells use the former, non-login interactive terminals the latter; when `~/.profile` sources `~/.bashrc` the block runs twice, which is idempotent and harmless). The block is never localized; it is byte-identical whatever the UI language:
 
 ```bash
-# >>> ai-switcher codex >>>
-if [ -r "$HOME/.config/ai-switcher/codex-home" ]; then
-  _ai_switcher_codex_home="$(cat "$HOME/.config/ai-switcher/codex-home" 2>/dev/null)"
-  if [ -n "$_ai_switcher_codex_home" ] && [ -d "$_ai_switcher_codex_home" ]; then
-    export CODEX_HOME="$_ai_switcher_codex_home"
+# >>> planswap codex >>>
+if [ -r "$HOME/.config/planswap/codex-home" ]; then
+  _planswap_codex_home="$(cat "$HOME/.config/planswap/codex-home" 2>/dev/null)"
+  if [ -n "$_planswap_codex_home" ] && [ -d "$_planswap_codex_home" ]; then
+    export CODEX_HOME="$_planswap_codex_home"
   else
     unset CODEX_HOME
   fi
-  unset _ai_switcher_codex_home
+  unset _planswap_codex_home
 fi
-# <<< ai-switcher codex <<<
+# <<< planswap codex <<<
 ```
 
 - When the state file is empty or the directory does not exist, the block runs `unset` instead of doing nothing: after switching back to the default account, newly opened terminals do not inherit the old value cached by the server. Once enabled, this extension owns the variable exclusively.
 - In `~/.bashrc` the block is inserted before the interactive guard (`case $- in *i*) ;; *) return;; esac`); if no guard is found it is appended to the end of the file. This way non-interactive login shells such as `bash -lc` also see it.
-- Pre-checks before writing (`aiSwitcher.codex.enable`):
+- Pre-checks before writing (`planswap.codex.enable`):
   1. The extension host's `process.env.SHELL` is bash. For zsh only a snippet is shown for the user to add to `~/.zprofile` and `~/.zshrc`; fish is not supported.
   2. `~/.bash_profile` and `~/.bash_login` do not exist, or they source `~/.bashrc`; otherwise the reason is shown and nothing is written.
   3. `~/.profile` and `~/.bashrc` contain no `export CODEX_HOME` of the user's own; if they do, the conflict is shown and nothing is written.
   4. A modal confirmation shows the content to be written; an existing marker block is not written again.
-  5. If the marker block of either file is damaged (start marker `# >>> ai-switcher codex >>>` without end marker `# <<< ai-switcher codex <<<`, `broken` in `rcStatus`), an error asks for a manual fix before retrying.
+  5. If the marker block of either file is damaged (start marker `# >>> planswap codex >>>` without end marker `# <<< planswap codex <<<`, `broken` in `rcStatus`), an error asks for a manual fix before retrying.
 - Self-check after writing: write a temporary state file pointing to a temporary empty directory, run `bash -i -l -c 'printf %s "$CODEX_HOME"'` and check the output, then restore the state file and delete the temporary directory. When the self-check fails, roll back **per file**: only the marker blocks newly written in this run are removed; files that already had a block before enabling are left alone; then report.
 - The rc files and the state file are written atomically (temporary file in the same directory + rename), so a half-written rc file can never be left behind.
-- `aiSwitcher.codex.disable`: remove both blocks by their markers and delete the state file. If either file lacks the end marker, an error is thrown, neither file is changed (both files are checked before anything is written), and the user is asked to fix it manually.
+- `planswap.codex.disable`: remove both blocks by their markers and delete the state file. If either file lacks the end marker, an error is thrown, neither file is changed (both files are checked before anything is written), and the user is asked to fix it manually.
 - Pre-check reasons, the modal texts and the self-check result are localized; the block written to the files is not.
 
 ## 5. Restarting the WSL-side server
@@ -138,7 +138,7 @@ fi
 
 ## 7. User interface
 
-- The activity bar container "AI Account Switcher" ("AI 账号切换器") holds a single Webview view `aiSwitcher.accounts`, also named "AI Account Switcher"; the tab bar at the top of the panel switches between the Claude and Codex pages. The Codex page is a page rendered by the same `AccountsPanel` instance from the data provided by `codexPanelSource` (the current tab is stored in the memento `panel.activeTab`, see design.md 5.1). The frontend uses page-specific texts, all from the Webview i18n tables in the current UI language (see design.md 5.5).
+- The activity bar container "PlanSwap" ("PlanSwap") holds a single Webview view `planswap.accounts`, also named "PlanSwap"; the tab bar at the top of the panel switches between the Claude and Codex pages. The Codex page is a page rendered by the same `AccountsPanel` instance from the data provided by `codexPanelSource` (the current tab is stored in the memento `panel.activeTab`, see design.md 5.1). The frontend uses page-specific texts, all from the Webview i18n tables in the current UI language (see design.md 5.5).
 - While not enabled, the Codex page only shows an explanation, the "Enable Codex switching" button and the "Tools" row.
 - Once enabled the layout matches the Claude page: account list (current account pinned to the first row), "Tools" row, add input at the bottom; every named account row also has a pencil icon for renaming (aliases stored per account in `codex.labels`).
 - Differences:
@@ -156,13 +156,13 @@ Command titles below are the English entries of `package.nls.json`; the category
 
 | Command id | Title | Behavior |
 |---|---|---|
-| `aiSwitcher.codex.enable` | Enable Codex Account Switching | Section 4 |
-| `aiSwitcher.codex.disable` | Disable Codex Account Switching | Section 4 |
-| `aiSwitcher.codex.switchAccount` | Switch Codex Account | QuickPick → 8.1 |
-| `aiSwitcher.codex.addAccount` | Add Codex Account | `panel.focusAdd('codex')`: opens the panel, switches to the Codex tab and focuses the add input |
-| `aiSwitcher.codex.removeAccount` | Delete Codex Account | QuickPick (without the current account) → 8.3 |
-| `aiSwitcher.codex.openTerminal` | Run codex in Terminal with Codex Account | QuickPick → 8.4 |
-| `aiSwitcher.codex.restartServer` | Restart WSL Server | Section 5, for when the state file has been changed but the server not yet restarted |
+| `planswap.codex.enable` | Enable Codex Account Switching | Section 4 |
+| `planswap.codex.disable` | Disable Codex Account Switching | Section 4 |
+| `planswap.codex.switchAccount` | Switch Codex Account | QuickPick → 8.1 |
+| `planswap.codex.addAccount` | Add Codex Account | `panel.focusAdd('codex')`: opens the panel, switches to the Codex tab and focuses the add input |
+| `planswap.codex.removeAccount` | Delete Codex Account | QuickPick (without the current account) → 8.3 |
+| `planswap.codex.openTerminal` | Run codex in Terminal with Codex Account | QuickPick → 8.4 |
+| `planswap.codex.restartServer` | Restart WSL Server | Section 5, for when the state file has been changed but the server not yet restarted |
 
 ### 8.1 Switch
 
@@ -222,7 +222,7 @@ Same model as on the Claude side (design.md 6.7), implemented in `src/codex/code
 - Creation, change or deletion of `auth.json` in each account directory (a change updates email and plan).
 - State file changes (so the "takes effect after restart" banner shows up when another window switches).
 - After adding or removing an account; after a terminal closes; when the refresh button is clicked.
-- When `aiSwitcher.language` changes (the whole panel re-renders in the new language).
+- When `planswap.language` changes (the whole panel re-renders in the new language).
 
 ## 10. Code structure
 

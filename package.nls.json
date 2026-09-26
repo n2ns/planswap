@@ -16,18 +16,18 @@
   "command.codex.openTerminal": "Run codex in Terminal with Codex Account",
   "command.codex.restartServer": "Restart WSL Server",
   "command.tools.openClaudeMd": "Open Global CLAUDE.md",
-  "category.tools": "AI Account Switcher",
+  "category.tools": "PlanSwap",
   "command.tools.openAgentsMd": "Open Global AGENTS.md",
   "command.tools.openSettings": "Open Extension Settings",
   "command.tools.reloadWindow": "Reload Window",
   "command.tools.restartExtHost": "Restart Extension Host",
   "command.tools.cliVersions": "Show CLI and Extension Versions",
   "command.tools.sync": "Re-link Accounts to the Default Account",
-  "viewContainer.title": "AI Account Switcher",
-  "view.name": "AI Account Switcher",
-  "config.title": "AI Account Switcher",
+  "viewContainer.title": "PlanSwap",
+  "view.name": "PlanSwap",
+  "config.title": "PlanSwap",
   "config.language.auto": "Follow the VS Code display language",
   "config.language.en": "English",
   "config.language.zhCn": "简体中文",
-  "config.language.description": "Language of the AI Account Switcher panel, status bar and messages. Takes effect immediately. Command titles and other static contributions follow the VS Code display language."
+  "config.language.description": "Language of the PlanSwap panel, status bar and messages. Takes effect immediately. Command titles and other static contributions follow the VS Code display language."
 }

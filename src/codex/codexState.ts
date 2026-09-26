@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { codexDefaultDir } from './codexPaths';
 import { t } from '../i18n';
 
-export const STATE_FILE = () => path.join(os.homedir(), '.config', 'ai-switcher', 'codex-home');
+export const STATE_FILE = () => path.join(os.homedir(), '.config', 'planswap', 'codex-home');
 
 export function readSelectedDir(): string | undefined {
   let raw: string;
@@ -49,20 +49,20 @@ export function effectiveDir(): string {
   return env ? path.resolve(env) : codexDefaultDir();
 }
 
-export const RC_BEGIN = '# >>> ai-switcher codex >>>';
-export const RC_END = '# <<< ai-switcher codex <<<';
+export const RC_BEGIN = '# >>> planswap codex >>>';
+export const RC_END = '# <<< planswap codex <<<';
 
 export function rcBlock(): string {
   return [
     RC_BEGIN,
-    'if [ -r "$HOME/.config/ai-switcher/codex-home" ]; then',
-    '  _ai_switcher_codex_home="$(cat "$HOME/.config/ai-switcher/codex-home" 2>/dev/null)"',
-    '  if [ -n "$_ai_switcher_codex_home" ] && [ -d "$_ai_switcher_codex_home" ]; then',
-    '    export CODEX_HOME="$_ai_switcher_codex_home"',
+    'if [ -r "$HOME/.config/planswap/codex-home" ]; then',
+    '  _planswap_codex_home="$(cat "$HOME/.config/planswap/codex-home" 2>/dev/null)"',
+    '  if [ -n "$_planswap_codex_home" ] && [ -d "$_planswap_codex_home" ]; then',
+    '    export CODEX_HOME="$_planswap_codex_home"',
     '  else',
     '    unset CODEX_HOME',
     '  fi',
-    '  unset _ai_switcher_codex_home',
+    '  unset _planswap_codex_home',
     'fi',
     RC_END,
     '',
@@ -277,7 +277,7 @@ export function selfCheck(): { ok: boolean; detail: string } {
   const backup = readText(file);
   let tmpDir: string | undefined;
   try {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switcher-codex-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'planswap-codex-'));
     writeSelectedDir(tmpDir);
     const r = spawnSync('bash', ['-i', '-l', '-c', 'printf %s "$CODEX_HOME"'], {
       timeout: 10000,

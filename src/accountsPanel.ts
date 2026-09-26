@@ -10,7 +10,7 @@ import type { AccountView, FromWebview, PanelMode, PanelState, TabState, ToWebvi
 import { isSharedClaudeAccount } from './claudeShare';
 import { getLocale } from './i18n';
 
-export const VIEW_ID = 'aiSwitcher.accounts';
+export const VIEW_ID = 'planswap.accounts';
 
 const ACTIVE_TAB_KEY = 'panel.activeTab';
 

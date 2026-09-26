@@ -27,15 +27,15 @@ export const zhCn: Record<MessageKey, string>;            // Chinese table, exac
 ## src/i18nVscode.ts (imports vscode)
 
 ```ts
-export function resolveLocale(): Locale;                                    // aiSwitcher.language: 'en' / 'zh-cn' as is; 'auto' (default) → vscode.env.language starts with 'zh' ? 'zh-cn' : 'en'
-export function watchLocale(onChange: () => void): vscode.Disposable;      // onDidChangeConfiguration affecting 'aiSwitcher.language' → setLocale(resolveLocale()), then onChange()
+export function resolveLocale(): Locale;                                    // planswap.language: 'en' / 'zh-cn' as is; 'auto' (default) → vscode.env.language starts with 'zh' ? 'zh-cn' : 'en'
+export function watchLocale(onChange: () => void): vscode.Disposable;      // onDidChangeConfiguration affecting 'planswap.language' → setLocale(resolveLocale()), then onChange()
 ```
 
 ## package.json static strings and the language setting
 
-- `displayName`, `description`, command titles and categories, view container and view names, configuration titles and descriptions are `%key%` placeholders resolved from `package.nls.json` (English) and `package.nls.zh-cn.json` (Chinese, same keys). VS Code resolves these by its own display language, not by `aiSwitcher.language` (platform limitation).
-- English names: displayName "PlanSwap: Claude Code & Codex Account Switcher" (brand "PlanSwap" is permanent; the part after the colon grows as more AI tools are supported), identifier `planswap`; container and view title "AI Account Switcher"; command categories "Claude Account" / "Codex Account" / "AI Account Switcher". The Chinese file keeps the Chinese titles ("AI 账号切换器", "Claude 账号", "Codex 账号", ...).
-- `contributes.configuration`: `aiSwitcher.language`, type string, enum `["auto", "en", "zh-cn"]`, default `"auto"`, scope `application`, enumDescriptions: auto = follow the VS Code display language; en = English; zh-cn = 简体中文.
+- `displayName`, `description`, command titles and categories, view container and view names, configuration titles and descriptions are `%key%` placeholders resolved from `package.nls.json` (English) and `package.nls.zh-cn.json` (Chinese, same keys). VS Code resolves these by its own display language, not by `planswap.language` (platform limitation).
+- English names: displayName "PlanSwap: Claude Code & Codex Account Switcher" (brand "PlanSwap" is permanent; the part after the colon grows as more AI tools are supported), identifier `planswap`; container and view title "PlanSwap"; command categories "Claude Account" / "Codex Account" / "PlanSwap". The Chinese file keeps the Chinese titles ("PlanSwap", "Claude 账号", "Codex 账号", ...).
+- `contributes.configuration`: `planswap.language`, type string, enum `["auto", "en", "zh-cn"]`, default `"auto"`, scope `application`, enumDescriptions: auto = follow the VS Code display language; en = English; zh-cn = 简体中文.
 
 ## src/paths.ts (data layer, no vscode import)
 
@@ -212,7 +212,7 @@ export type FromWebview =
 ## src/accountsPanel.ts
 
 ```ts
-export const VIEW_ID = 'aiSwitcher.accounts';
+export const VIEW_ID = 'planswap.accounts';
 
 export interface PanelSource {
   accounts(): AccountView[];      // each implementation handles the external-directory row itself; label / email / plan already filled in
@@ -284,7 +284,7 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 ```ts
 export class StatusBar implements vscode.Disposable {
   constructor(store: AccountStore, labels: LabelStore);
-  update(): void;   // text `$(account) Claude: <label>` (labelFor(name, labels); t('account.external') for an external directory); tooltip first line email (t() "Not logged in" when none) + ` · <plan>` when there is a plan, second line the directory; command = 'workbench.view.extension.aiSwitcher'
+  update(): void;   // text `$(account) Claude: <label>` (labelFor(name, labels); t('account.external') for an external directory); tooltip first line email (t() "Not logged in" when none) + ` · <plan>` when there is a plan, second line the directory; command = 'workbench.view.extension.planswap'
   dispose(): void;
 }
 ```
@@ -304,7 +304,7 @@ export function registerCommands(deps: Deps): vscode.Disposable[];
 export function validateName(name: string, store: AccountStore, labels: LabelStore): string | undefined;
 export function shQuote(s: string): string;
 ```
-- Command ids: `aiSwitcher.switchAccount`, `aiSwitcher.addAccount`, `aiSwitcher.removeAccount`, `aiSwitcher.openTerminal`, `aiSwitcher.refresh`. None of the commands take arguments:
+- Command ids: `planswap.switchAccount`, `planswap.addAccount`, `planswap.removeAccount`, `planswap.openTerminal`, `planswap.refresh`. None of the commands take arguments:
   - `switchAccount`: QuickPick of the non-current `store.all()` accounts, then switch;
   - `addAccount`: only calls `panel.focusAdd('claude')`;
   - `removeAccount`: QuickPick of `store.named()`, then remove (with modal confirmation);
@@ -328,7 +328,7 @@ export function shQuote(s: string): string;
 export async function activate(ctx: vscode.ExtensionContext): Promise<void>;
 export function deactivate(): void;
 ```
-`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "AI Account Switcher only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(ctx.globalState, 'codex.labels')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined, codexShareOps: codex ? { isShared: isSharedCodexAccount, refresh: ensureCodexLinks } : undefined, labelOf: (mode, dir) => labelFor of store.findByDir(dir) / codex.store.findByDir(dir) with claudeLabels / codexLabels, else path.basename(dir) }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `aiSwitcher.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
+`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "PlanSwap only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(ctx.globalState, 'codex.labels')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined, codexShareOps: codex ? { isShared: isSharedCodexAccount, refresh: ensureCodexLinks } : undefined, labelOf: (mode, dir) => labelFor of store.findByDir(dir) / codex.store.findByDir(dir) with claudeLabels / codexLabels, else path.basename(dir) }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `planswap.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
 
 ## src/tools.ts (tools: footer toolbar and per-page "Tools" row, 2026-09-26)
 
@@ -349,11 +349,11 @@ export interface ShareOps {
 }
 export function runTool(mode: PanelMode, tool: ToolId, deps: ToolDeps): Promise<void>; // shared entry for panel tool messages and the Command Palette
 export function registerToolCommands(deps: ToolDeps): vscode.Disposable[];
-//   aiSwitcher.tools.openClaudeMd → runTool('claude','openGlobalMd'); openAgentsMd → runTool('codex','openGlobalMd');
+//   planswap.tools.openClaudeMd → runTool('claude','openGlobalMd'); openAgentsMd → runTool('codex','openGlobalMd');
 //   openSettings → QuickPick (Claude Code / Codex), then runTool(mode,'openSettings'); reloadWindow / restartExtHost → runTool('claude', …);
 //   cliVersions → runTool('claude','cliVersions', { ...deps, postVersions: undefined }) (read-only QuickPick list);
 //   sync → QuickPick (Claude Code / Codex, placeHolder t('tools.pick.sync')), then runTool(mode,'sync').
-//   Restarting the WSL server reuses aiSwitcher.codex.restartServer and is not registered here
+//   Restarting the WSL server reuses planswap.codex.restartServer and is not registered here
 ```
 
 Tool behavior (all texts via `t()`):
@@ -376,11 +376,11 @@ Tool behavior (all texts via `t()`):
 
 ### package.json
 
-Commands (category "AI Account Switcher", 7 in total): `aiSwitcher.tools.openClaudeMd` (Open Global CLAUDE.md, `$(symbol-ruler)`), `aiSwitcher.tools.openAgentsMd` (Open Global AGENTS.md, `$(symbol-ruler)`), `aiSwitcher.tools.openSettings` (Open Extension Settings, `$(settings-gear)`), `aiSwitcher.tools.reloadWindow` (Reload Window, `$(refresh)`), `aiSwitcher.tools.restartExtHost` (Restart Extension Host, `$(debug-restart)`), `aiSwitcher.tools.cliVersions` (Show CLI and Extension Versions, `$(info)`), `aiSwitcher.tools.sync` (Re-link Accounts to the Default Account, `$(sync)`). Together with the 5 "Claude Account" and 7 "Codex Account" commands, `contributes.commands` has 19 entries. Titles and categories are `%key%` placeholders in `package.json`.
+Commands (category "PlanSwap", 7 in total): `planswap.tools.openClaudeMd` (Open Global CLAUDE.md, `$(symbol-ruler)`), `planswap.tools.openAgentsMd` (Open Global AGENTS.md, `$(symbol-ruler)`), `planswap.tools.openSettings` (Open Extension Settings, `$(settings-gear)`), `planswap.tools.reloadWindow` (Reload Window, `$(refresh)`), `planswap.tools.restartExtHost` (Restart Extension Host, `$(debug-restart)`), `planswap.tools.cliVersions` (Show CLI and Extension Versions, `$(info)`), `planswap.tools.sync` (Re-link Accounts to the Default Account, `$(sync)`). Together with the 5 "Claude Account" and 7 "Codex Account" commands, `contributes.commands` has 19 entries. Titles and categories are `%key%` placeholders in `package.json`.
 
 ## Shared and independent accounts (2026-09-26)
 
 - Claude: `src/claudeShare.ts` (above), design in design.md 6.7. Codex: `src/codex/codexShare.ts` (codex-interfaces.md), design in codex-design.md 8.6. Both return `ShareReport` / `MigrateReport` (types from `claudeShare.ts`) and the host formats them with `describeShareReport`.
 - The mode is detected from disk (`isSharedClaudeAccount` / `isSharedCodexAccount`) and exposed as `AccountView.shared`; it is never stored.
-- Messages: `add` carries `shared`; `share` converts an independent account; `tool: 'sync'` re-links every shared account of the page. Command Palette: `aiSwitcher.tools.sync` (first pick Claude Code / Codex).
+- Messages: `add` carries `shared`; `share` converts an independent account; `tool: 'sync'` re-links every shared account of the page. Command Palette: `planswap.tools.sync` (first pick Claude Code / Codex).
 - Deleting a shared account's directory (`deleteAccountDir` / `deleteCodexDir`, `fs.rm` recursive) removes its links only; the default content is not affected (regression tests in `test/claudeShare.test.ts` / `test/codexShare.test.ts`).

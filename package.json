@@ -32,115 +32,115 @@
   "contributes": {
     "commands": [
       {
-        "command": "aiSwitcher.switchAccount",
+        "command": "planswap.switchAccount",
         "title": "%command.switchAccount%",
         "category": "%category.claude%",
         "icon": "$(arrow-swap)"
       },
       {
-        "command": "aiSwitcher.addAccount",
+        "command": "planswap.addAccount",
         "title": "%command.addAccount%",
         "category": "%category.claude%",
         "icon": "$(add)"
       },
       {
-        "command": "aiSwitcher.removeAccount",
+        "command": "planswap.removeAccount",
         "title": "%command.removeAccount%",
         "category": "%category.claude%",
         "icon": "$(trash)"
       },
       {
-        "command": "aiSwitcher.openTerminal",
+        "command": "planswap.openTerminal",
         "title": "%command.openTerminal%",
         "category": "%category.claude%",
         "icon": "$(terminal)"
       },
       {
-        "command": "aiSwitcher.refresh",
+        "command": "planswap.refresh",
         "title": "%command.refresh%",
         "category": "%category.claude%",
         "icon": "$(refresh)"
       },
       {
-        "command": "aiSwitcher.codex.enable",
+        "command": "planswap.codex.enable",
         "title": "%command.codex.enable%",
         "category": "%category.codex%",
         "icon": "$(check)"
       },
       {
-        "command": "aiSwitcher.codex.disable",
+        "command": "planswap.codex.disable",
         "title": "%command.codex.disable%",
         "category": "%category.codex%",
         "icon": "$(circle-slash)"
       },
       {
-        "command": "aiSwitcher.codex.switchAccount",
+        "command": "planswap.codex.switchAccount",
         "title": "%command.codex.switchAccount%",
         "category": "%category.codex%",
         "icon": "$(arrow-swap)"
       },
       {
-        "command": "aiSwitcher.codex.addAccount",
+        "command": "planswap.codex.addAccount",
         "title": "%command.codex.addAccount%",
         "category": "%category.codex%",
         "icon": "$(add)"
       },
       {
-        "command": "aiSwitcher.codex.removeAccount",
+        "command": "planswap.codex.removeAccount",
         "title": "%command.codex.removeAccount%",
         "category": "%category.codex%",
         "icon": "$(trash)"
       },
       {
-        "command": "aiSwitcher.codex.openTerminal",
+        "command": "planswap.codex.openTerminal",
         "title": "%command.codex.openTerminal%",
         "category": "%category.codex%",
         "icon": "$(terminal)"
       },
       {
-        "command": "aiSwitcher.codex.restartServer",
+        "command": "planswap.codex.restartServer",
         "title": "%command.codex.restartServer%",
         "category": "%category.codex%",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "aiSwitcher.tools.openClaudeMd",
+        "command": "planswap.tools.openClaudeMd",
         "title": "%command.tools.openClaudeMd%",
         "category": "%category.tools%",
         "icon": "$(symbol-ruler)"
       },
       {
-        "command": "aiSwitcher.tools.openAgentsMd",
+        "command": "planswap.tools.openAgentsMd",
         "title": "%command.tools.openAgentsMd%",
         "category": "%category.tools%",
         "icon": "$(symbol-ruler)"
       },
       {
-        "command": "aiSwitcher.tools.openSettings",
+        "command": "planswap.tools.openSettings",
         "title": "%command.tools.openSettings%",
         "category": "%category.tools%",
         "icon": "$(settings-gear)"
       },
       {
-        "command": "aiSwitcher.tools.reloadWindow",
+        "command": "planswap.tools.reloadWindow",
         "title": "%command.tools.reloadWindow%",
         "category": "%category.tools%",
         "icon": "$(refresh)"
       },
       {
-        "command": "aiSwitcher.tools.restartExtHost",
+        "command": "planswap.tools.restartExtHost",
         "title": "%command.tools.restartExtHost%",
         "category": "%category.tools%",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "aiSwitcher.tools.cliVersions",
+        "command": "planswap.tools.cliVersions",
         "title": "%command.tools.cliVersions%",
         "category": "%category.tools%",
         "icon": "$(info)"
       },
       {
-        "command": "aiSwitcher.tools.sync",
+        "command": "planswap.tools.sync",
         "title": "%command.tools.sync%",
         "category": "%category.tools%",
         "icon": "$(sync)"
@@ -149,7 +149,7 @@
     "configuration": {
       "title": "%config.title%",
       "properties": {
-        "aiSwitcher.language": {
+        "planswap.language": {
           "type": "string",
           "enum": [
             "auto",
@@ -170,17 +170,17 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "aiSwitcher",
+          "id": "planswap",
           "title": "%viewContainer.title%",
           "icon": "resources/account.svg"
         }
       ]
     },
     "views": {
-      "aiSwitcher": [
+      "planswap": [
         {
           "type": "webview",
-          "id": "aiSwitcher.accounts",
+          "id": "planswap.accounts",
           "name": "%view.name%"
         }
       ]
@@ -188,8 +188,8 @@
     "menus": {
       "view/title": [
         {
-          "command": "aiSwitcher.refresh",
-          "when": "view == aiSwitcher.accounts",
+          "command": "planswap.refresh",
+          "when": "view == planswap.accounts",
           "group": "navigation"
         }
       ]

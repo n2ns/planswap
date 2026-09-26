@@ -16,7 +16,7 @@ Switch between the Claude Code and Codex subscription accounts you own (Claude P
 [![Stars](https://img.shields.io/github/stars/n2ns/planswap?style=flat&logo=github&cacheSeconds=10800)](https://github.com/n2ns/planswap/stargazers)
 [![Last Commit](https://img.shields.io/github/last-commit/n2ns/planswap?style=flat&cacheSeconds=10800)](https://github.com/n2ns/planswap/commits/main)
 
-![PlanSwap concept illustration showing separate Claude Code and Codex account switching panels](resources/account-switcher-banner.webp)
+![PlanSwap concept illustration showing separate Claude Code and Codex account switching panels](resources/planswap-banner.webp)
 
 ## Features
 
@@ -63,7 +63,7 @@ In a WSL window, run **Extensions: Install from VSIX...** and pick the generated
 
 ## Quick start
 
-Open **AI Account Switcher** in the activity bar.
+Open **PlanSwap** in the activity bar.
 
 **Claude**
 
@@ -102,7 +102,7 @@ The shared footer provides version information, window reload, extension-host re
 
 ## Language
 
-Set `aiSwitcher.language` to `auto` (default, follows VS Code), `en` or `zh-cn`. The panel, status bar and messages switch immediately. Command titles and the view name follow VS Code's display language (a VS Code limitation).
+Set `planswap.language` to `auto` (default, follows VS Code), `en` or `zh-cn`. The panel, status bar and messages switch immediately. Command titles and the view name follow VS Code's display language (a VS Code limitation).
 
 ## Known limitations
 

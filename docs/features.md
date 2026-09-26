@@ -23,7 +23,7 @@ This document describes the extension's behavior feature by feature. The impleme
 
 ## 2. Sidebar
 
-- A new account icon in the activity bar (container id `aiSwitcher`, title "AI Account Switcher" / "AI 账号切换器") containing **one** view, also named "AI Account Switcher" (view id `aiSwitcher.accounts`). These names follow VS Code's display language (see section 11).
+- A new account icon in the activity bar (container id `planswap`, title "PlanSwap" / "PlanSwap") containing **one** view, also named "PlanSwap" (view id `planswap.accounts`). These names follow VS Code's display language (see section 11).
 - The sidebar is a Webview panel (changed from a native TreeView to a Webview); UI components come from @vscode-elements/elements, icons from @vscode/codicons; all colors follow the editor theme.
 - **Tab bar**: two tab buttons at the top of the panel, Claude / Codex (segmented control style); the selected one is highlighted, and a click switches the page. The Claude page is what this section and sections 3–8 describe; the Codex page is in section 10. The frontend remembers the current tab (in the Webview's own state) and tells the host through a `setTab` message; the host stores it in the memento key `panel.activeTab` (default `claude`); the frontend only adopts the host's pushed `active` when it has no record of its own. The Command Palette's "add account" commands first switch to the corresponding tab and then focus the input.
 - Each page contains, from top to bottom: banner (only when needed), all accounts list (the current account pinned to the first row and highlighted), "Tools" row (see 5.5), add-account section; the add inputs of the two pages keep independent state.
@@ -120,7 +120,7 @@ Always present at the bottom of each page (with a divider above it):
 
 ### 2.6 Title bar button
 
-Only one: `$(refresh)` refresh (`aiSwitcher.refresh`), which refreshes both the Claude and the Codex page.
+Only one: `$(refresh)` refresh (`planswap.refresh`), which refreshes both the Claude and the Codex page.
 
 ### 2.7 Inline rename
 
@@ -142,14 +142,14 @@ After clicking the pencil icon of a named account row, the row's name turns into
 
 - On the left it shows `$(account) Claude: <display name of the current account>` (the alias for accounts that have one); when the current account is an external directory it shows `Claude: External directory` (localized).
 - The first tooltip line is the email ("Not logged in" when there is none), followed by ` · <plan>` when there is a plan; the second line is the directory.
-- A click opens the "AI Account Switcher" sidebar.
-- It updates at the same times as the sidebar (see section 6), and also immediately when `aiSwitcher.language` changes.
+- A click opens the "PlanSwap" sidebar.
+- It updates at the same times as the sidebar (see section 6), and also immediately when `planswap.language` changes.
 
 ## 4. Commands
 
 All five commands appear in the Command Palette in the category "Claude Account" ("Claude 账号"). Buttons, double-clicks, inputs and other actions in the panel send messages directly to the extension to run the corresponding flow, without going through the Command Palette; when a command that needs an account (switch, remove, open terminal) is run from the Command Palette, a QuickPick asks for the account first (each item shows the display name, the email or "Not logged in", and the directory); when there is nothing to pick, "No accounts to choose from." is shown. Messages and terminal names always use the account's display name.
 
-### 4.1 Switch account `aiSwitcher.switchAccount`
+### 4.1 Switch account `planswap.switchAccount`
 
 Entry points:
 
@@ -169,7 +169,7 @@ Flow:
 
 After the official extension sees the `CLAUDE_CONFIG_DIR` change, it refreshes the account display of all panels about 1 second later; this is the official extension's own behavior.
 
-### 4.2 Add account `aiSwitcher.addAccount`
+### 4.2 Add account `planswap.addAccount`
 
 Entry point: the add-account input at the bottom of the panel (see 2.5). The Command Palette's "Add Account (Focus Sidebar Input)" only opens the sidebar and puts the focus into that input; it does not show an input box.
 
@@ -197,7 +197,7 @@ Flow:
 6. The account is registered in the list (the directory is removed from the ignore list if it was there), the panel and the status bar are refreshed, and an account info file watcher is added for the directory.
 7. The input is cleared and the new account appears in the list. No follow-up message is shown after adding; to sign in, click the row's terminal button, or switch to the account and sign in from the official panel.
 
-### 4.3 Delete account `aiSwitcher.removeAccount`
+### 4.3 Delete account `planswap.removeAccount`
 
 Entry points:
 
@@ -220,7 +220,7 @@ If you choose not to delete the directory, it stays on disk and is recorded in t
 
 Deleting the directory of a shared account removes only its own files (credentials, `.claude.json`, account-only entries) and its symlinks; `fs.rm` does not follow symlinks, so the shared settings, history and sessions in the default directory are kept.
 
-### 4.4 Run claude in a terminal as an account `aiSwitcher.openTerminal`
+### 4.4 Run claude in a terminal as an account `planswap.openTerminal`
 
 Entry points:
 
@@ -238,7 +238,7 @@ Flow:
 
 Prerequisite: a `claude` command on PATH.
 
-### 4.5 Refresh `aiSwitcher.refresh`
+### 4.5 Refresh `planswap.refresh`
 
 Entry points: the `$(refresh)` title bar button, the Command Palette. Removes accounts whose directory no longer exists and registers unregistered `~/.claude-*` directories (rules in section 5), re-reads each account directory's email, plan and sign-in state, redraws the panel and updates the status bar.
 
@@ -329,7 +329,7 @@ For both modes `.credentials.json` is never read, copied or linked, so remote MC
   - Settings, icon `settings-gear`: opens the Settings UI filtered by `claudeCode.` (Claude page) / `chatgpt.` (Codex page).
   - Re-link, icon `sync` (Chinese label "重新链接"; title "Re-link every linked account to the default account's settings, rules, skills, history and sessions, and mirror its MCP servers" on the Claude page, "Re-link every linked account to the default account's settings, rules, skills, history, sessions and thread databases" on the Codex page): for every registered named account of this page that is shared, re-creates or repairs its links as when adding it and, on the Claude page, mirrors the default account's `.claude.json` (see "Shared accounts" in section 5; Codex: 10.12); independent accounts are not touched. With no shared accounts: "No linked Claude accounts to re-link." (`Codex` on the Codex page). Otherwise one notification "Re-linked N linked Claude account(s) to the default account.", followed by "Needs attention: <name>: <notes>; …" (shown as a warning) when an account kept its own entries, had entries not linked for safety, or failed. The list uses each account's display name (the directory name when it is not registered). The "Tools" row is shown on the Codex page even while Codex switching is not enabled.
   - Update CLI, icon `cloud-download` (Chinese label "更新 CLI"): opens and shows a new integrated terminal named "Update Claude CLI" / "Update Codex CLI" (localized). Claude sends `claude update`; Codex sends `env -u CODEX_HOME codex update`, using the default home for this update process only so an account selected by PlanSwap does not affect standalone installation detection. The action does not change the selected account, shell startup files or extension-host environment. Progress, prompts and errors stay in the terminal; there is no pre-check or separate check button. This panel-only action is also available while Codex switching is disabled. It assumes a `claude` / `codex` command on PATH; the Codex workaround targets standalone installations under the default `~/.codex`.
-- Command Palette entries (category "AI Account Switcher"): `aiSwitcher.tools.openClaudeMd` (open the global CLAUDE.md), `aiSwitcher.tools.openAgentsMd` (open the global AGENTS.md), `aiSwitcher.tools.openSettings` (open extension settings, first a QuickPick Claude Code / Codex), `aiSwitcher.tools.reloadWindow` (reload window), `aiSwitcher.tools.restartExtHost` (restart extension host), `aiSwitcher.tools.cliVersions` (show CLI and extension versions; the Command Palette entry uses a read-only QuickPick list instead of the panel card), `aiSwitcher.tools.sync` (Re-link Accounts to the Default Account, first a QuickPick Claude Code / Codex); restarting the WSL server reuses `aiSwitcher.codex.restartServer`.
+- Command Palette entries (category "PlanSwap"): `planswap.tools.openClaudeMd` (open the global CLAUDE.md), `planswap.tools.openAgentsMd` (open the global AGENTS.md), `planswap.tools.openSettings` (open extension settings, first a QuickPick Claude Code / Codex), `planswap.tools.reloadWindow` (reload window), `planswap.tools.restartExtHost` (restart extension host), `planswap.tools.cliVersions` (show CLI and extension versions; the Command Palette entry uses a read-only QuickPick list instead of the panel card), `planswap.tools.sync` (Re-link Accounts to the Default Account, first a QuickPick Claude Code / Codex); restarting the WSL server reuses `planswap.codex.restartServer`.
 - When the Codex part fails to initialize (see the beginning of section 10), the toolbar and the "Tools" rows of both pages keep working; only "Restart WSL Server" and the Codex page's "Re-link" report that Codex is not initialized ("The Codex part is not initialized; cannot re-link linked accounts.").
 
 ## 6. Refresh triggers
@@ -344,7 +344,7 @@ The panel and the status bar refresh when:
 - after adding or removing an account;
 - a terminal created by this extension closes;
 - the refresh button is clicked;
-- the `aiSwitcher.language` setting changes (both are re-rendered in the new language).
+- the `planswap.language` setting changes (both are re-rendered in the new language).
 
 ## 7. Safety checks before deleting a directory
 
@@ -366,18 +366,18 @@ When they pass, it is deleted with Node's `fs.rm(dir, { recursive: true, force: 
   - this extension's sidebar and status bar in other windows update when that window receives the setting-change event (not specifically verified across windows; click refresh if they do not update);
   - sessions already open in each window keep using the old account and each window must be reloaded separately. The reload banner (or the notification when the panel is not visible) only appears in the window that performed the switch.
 - The account list lives in `globalState`; accounts added in one window are not guaranteed to show up in other windows immediately; click refresh or reload the window.
-- `aiSwitcher.language` has `application` scope, so a change applies to every window.
+- `planswap.language` has `application` scope, so a change applies to every window.
 
 ## 9. Platform guard
 
-- When activated on a non-Linux platform, only the warning "AI Account Switcher only supports WSL/Linux." is shown once; the sidebar, status bar and commands are not registered.
+- When activated on a non-Linux platform, only the warning "PlanSwap only supports WSL/Linux." is shown once; the sidebar, status bar and commands are not registered.
 - The extension declares `extensionKind: ["workspace"]`, so in a WSL window it is installed and runs on the WSL side.
 
 ## 10. Codex account switching
 
 Independent of Claude account switching. The implementation is based on `docs/codex-design.md` (design) and `docs/codex-interfaces.md` (module contract). This extension only reads each account directory's `auth.json` and only decodes the payload of its `tokens.id_token` to display the email and plan; it never copies, links, swaps, caches or outputs any token or `auth.json`. The contents of `~/.codex` are only changed for shared accounts (10.12): missing shared entries are created empty there as link targets, and converting an account moves its files in without overwriting existing ones.
 
-If the Codex part fails to initialize on activation (e.g. an rc file is unreadable), this is only logged and Claude is not affected: the Codex page renders as "not enabled, no accounts"; account actions on the Codex page and the 7 `aiSwitcher.codex.*` commands then show "Codex account switching is unavailable: <reason>", while the toolbar and the "Tools" row work as usual (see 5.5).
+If the Codex part fails to initialize on activation (e.g. an rc file is unreadable), this is only logged and Claude is not affected: the Codex page renders as "not enabled, no accounts"; account actions on the Codex page and the 7 `planswap.codex.*` commands then show "Codex account switching is unavailable: <reason>", while the toolbar and the "Tools" row work as usual (see 5.5).
 
 ### 10.1 Accounts and directories
 
@@ -387,7 +387,7 @@ If the Codex part fails to initialize on activation (e.g. an rc file is unreadab
 | `<name>` | `~/.codex-<name>` | Created with "Add account", or registered by auto-discovery (same rules as section 5, basename matches `^\.codex-[A-Za-z0-9_-]+$`) |
 
 - The account list is stored in `globalState` `codex.accounts`, the ignore list in `codex.ignoredDirs`, with the same semantics as on the Claude side (entries whose directory no longer exists are pruned on activation and refresh and their alias is cleared; auto-discovery skips a name equal, ignoring case, to the name or display name of an existing Codex account; a deleted directory leaves the ignore list). Account names and display names are compared ignoring case when checking for duplicates.
-- The **selected account** is whatever the state file `~/.config/ai-switcher/codex-home` says (content is the absolute path of the directory, empty means the default account; shared across windows, the last writer wins).
+- The **selected account** is whatever the state file `~/.config/planswap/codex-home` says (content is the absolute path of the directory, empty means the default account; shared across windows, the last writer wins).
 - The **directory effective in this window** = the extension host's own `process.env.CODEX_HOME`, or `~/.codex` when empty. The panel marks it as "current". When the effective directory does not correspond to any registered account, an "External directory" row is appended to the list and marked current.
 - Signed-in state: whether `<dir>/auth.json` exists.
 - Email and plan: when `auth.json` exists it is read and parsed as JSON:
@@ -416,13 +416,13 @@ Seven commands appear in the Command Palette in the category "Codex Account" ("C
 
 | Command id | Title | Entry points and flow |
 |---|---|---|
-| `aiSwitcher.codex.enable` | Enable Codex Account Switching | Disabled-page button, Command Palette → 10.4 |
-| `aiSwitcher.codex.disable` | Disable Codex Account Switching | Command Palette → 10.5 |
-| `aiSwitcher.codex.switchAccount` | Switch Codex Account | Panel switch button/double-click/Enter, Command Palette QuickPick (without the account that is both effective and selected) → 10.6 |
-| `aiSwitcher.codex.addAccount` | Add Codex Account | Opens the panel, switches to the Codex tab and focuses the add input → 10.7 |
-| `aiSwitcher.codex.removeAccount` | Delete Codex Account | Panel trash button via inline confirmation, Command Palette QuickPick (without the effective and the selected account) → 10.8 |
-| `aiSwitcher.codex.openTerminal` | Run codex in Terminal with Codex Account | Panel terminal/sign-in button, Command Palette QuickPick (also the external directory when it is current) → 10.9 |
-| `aiSwitcher.codex.restartServer` | Restart WSL Server | Button of the "takes effect after restart" banner, Command Palette → Antigravity / VSCodium: modal confirmation "Restart {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?", then restart as in 10.6 step 5; VS Code / unrecognized editor: the warning "This editor's WSL server cannot be restarted automatically. {hint}" directly, without a modal |
+| `planswap.codex.enable` | Enable Codex Account Switching | Disabled-page button, Command Palette → 10.4 |
+| `planswap.codex.disable` | Disable Codex Account Switching | Command Palette → 10.5 |
+| `planswap.codex.switchAccount` | Switch Codex Account | Panel switch button/double-click/Enter, Command Palette QuickPick (without the account that is both effective and selected) → 10.6 |
+| `planswap.codex.addAccount` | Add Codex Account | Opens the panel, switches to the Codex tab and focuses the add input → 10.7 |
+| `planswap.codex.removeAccount` | Delete Codex Account | Panel trash button via inline confirmation, Command Palette QuickPick (without the effective and the selected account) → 10.8 |
+| `planswap.codex.openTerminal` | Run codex in Terminal with Codex Account | Panel terminal/sign-in button, Command Palette QuickPick (also the external directory when it is current) → 10.9 |
+| `planswap.codex.restartServer` | Restart WSL Server | Button of the "takes effect after restart" banner, Command Palette → Antigravity / VSCodium: modal confirmation "Restart {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?", then restart as in 10.6 step 5; VS Code / unrecognized editor: the warning "This editor's WSL server cannot be restarted automatically. {hint}" directly, without a modal |
 
 ### 10.4 Enable
 
@@ -492,26 +492,26 @@ While another switch is in progress (e.g. its confirmation is still open), a fur
 ### 10.10 Refresh triggers
 
 - Creation, change or deletion of `auth.json` in the directory of each account row (including the external-directory row);
-- creation, change or deletion of the state file `~/.config/ai-switcher/codex-home` (so the "takes effect after restart" banner shows up when another window switches);
-- when the panel becomes visible again; after adding or removing an account; after a terminal created by this extension closes; when the refresh button is clicked (which also scans and registers unregistered `~/.codex-*`); when `aiSwitcher.language` changes.
+- creation, change or deletion of the state file `~/.config/planswap/codex-home` (so the "takes effect after restart" banner shows up when another window switches);
+- when the panel becomes visible again; after adding or removing an account; after a terminal created by this extension closes; when the refresh button is clicked (which also scans and registers unregistered `~/.codex-*`); when `planswap.language` changes.
 
 ### 10.11 State file and rc marker block
 
-- State file: `~/.config/ai-switcher/codex-home`, directory 0700, file 0600. Content is the absolute path of the selected directory, or empty (default account). Atomic write: temporary file in the same directory + `fsync` + `rename` + directory `fsync`.
+- State file: `~/.config/planswap/codex-home`, directory 0700, file 0600. Content is the absolute path of the selected directory, or empty (default account). Atomic write: temporary file in the same directory + `fsync` + `rename` + directory `fsync`.
 - The marker block is written to both `~/.profile` and `~/.bashrc` with the following content (login shells use the former, non-login interactive terminals the latter; when `~/.profile` sources `~/.bashrc` it runs twice, which is idempotent and harmless). The block is never localized; it is identical whatever the UI language:
 
 ```bash
-# >>> ai-switcher codex >>>
-if [ -r "$HOME/.config/ai-switcher/codex-home" ]; then
-  _ai_switcher_codex_home="$(cat "$HOME/.config/ai-switcher/codex-home" 2>/dev/null)"
-  if [ -n "$_ai_switcher_codex_home" ] && [ -d "$_ai_switcher_codex_home" ]; then
-    export CODEX_HOME="$_ai_switcher_codex_home"
+# >>> planswap codex >>>
+if [ -r "$HOME/.config/planswap/codex-home" ]; then
+  _planswap_codex_home="$(cat "$HOME/.config/planswap/codex-home" 2>/dev/null)"
+  if [ -n "$_planswap_codex_home" ] && [ -d "$_planswap_codex_home" ]; then
+    export CODEX_HOME="$_planswap_codex_home"
   else
     unset CODEX_HOME
   fi
-  unset _ai_switcher_codex_home
+  unset _planswap_codex_home
 fi
-# <<< ai-switcher codex <<<
+# <<< planswap codex <<<
 ```
 
 - In `~/.bashrc` it is inserted before the interactive guard (the `case $- in` line) with a blank line added before the block; if no guard is found it is appended at the end. In `~/.profile` it is appended at the end. The files keep their original permissions; a missing file is created with 0644. The rc files are written atomically.
@@ -544,11 +544,11 @@ Same model as on the Claude side (section 5), with the default directory `~/.cod
 
 ## 11. Language
 
-- Setting `aiSwitcher.language` (scope `application`): `auto` (default) follows the VS Code display language (`zh-cn` when it starts with `zh`, otherwise `en`); `en` English; `zh-cn` 简体中文.
+- Setting `planswap.language` (scope `application`): `auto` (default) follows the VS Code display language (`zh-cn` when it starts with `zh`, otherwise `en`); `en` English; `zh-cn` 简体中文.
 - Changing the setting takes effect immediately, without a reload, for everything rendered at runtime:
   - the sidebar panel re-renders completely in the new language: tabs, section titles, banners, buttons, tooltips, aria-labels, placeholders, the add-section help text, validation messages, the disabled Codex page, the "Tools" row, the footer toolbar titles and the version card;
   - the status bar text and tooltip ("Not logged in", "External directory");
   - notifications, warnings, errors, modal dialogs and their buttons, QuickPick items and placeholders, and error reasons produced by the extension (validation messages, safety-check reasons, pre-check reasons, restart errors).
-- Command titles, command categories, the activity bar container and view names, and the setting's own description are static `package.json` strings resolved by VS Code from `package.nls.json` (English) / `package.nls.zh-cn.json` (Chinese) according to **VS Code's display language**; they do not follow `aiSwitcher.language` (platform limitation). Change VS Code's display language to change them.
+- Command titles, command categories, the activity bar container and view names, and the setting's own description are static `package.json` strings resolved by VS Code from `package.nls.json` (English) / `package.nls.zh-cn.json` (Chinese) according to **VS Code's display language**; they do not follow `planswap.language` (platform limitation). Change VS Code's display language to change them.
 - Never translated: shell commands sent to terminals, file names and paths, setting ids, command ids, terminal names `Claude (<label>)` / `Codex (<label>)`, plan names (`Pro`, `Max 20x`, `Plus`, `API key`, ...), and the rc marker block written to `~/.profile` / `~/.bashrc` (see 10.11).
 - Aliases are user data and are shown as typed in every language. The external-directory name is reserved in both languages ("External directory" and "外部目录" are both rejected as aliases).

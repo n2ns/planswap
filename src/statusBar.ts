@@ -12,7 +12,7 @@ export class StatusBar implements vscode.Disposable {
     private readonly store: AccountStore,
     private readonly labels: LabelStore,
   ) {
-    this.item.command = 'workbench.view.extension.aiSwitcher';
+    this.item.command = 'workbench.view.extension.planswap';
     this.update();
     this.item.show();
   }

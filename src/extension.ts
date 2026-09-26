@@ -37,7 +37,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     codex = { store: codexStore, labels: codexLabels };
   } catch (err) {
     codexInitError = err instanceof Error ? err.message : String(err);
-    console.error('[ai-switcher] Codex initialization failed:', err);
+    console.error('[planswap] Codex initialization failed:', err);
   }
 
   // Toolbar dependencies: no restart entry when Codex is not initialized
@@ -60,7 +60,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     // Toolbar messages are handled as usual (runTool reports "not initialized" for restartServer)
     panel.setHandler('codex', (msg) => (msg.type === 'tool' ? runTool('codex', msg.tool, tools) : notify()));
     for (const id of ['enable', 'disable', 'switchAccount', 'addAccount', 'removeAccount', 'openTerminal', 'restartServer']) {
-      ctx.subscriptions.push(vscode.commands.registerCommand(`aiSwitcher.codex.${id}`, notify));
+      ctx.subscriptions.push(vscode.commands.registerCommand(`planswap.codex.${id}`, notify));
     }
   }
 

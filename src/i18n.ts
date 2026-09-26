@@ -22,7 +22,7 @@ export const en = {
   'account.deleteDirFailed': 'Failed to delete directory: {error}',
 
   // extension.ts
-  'ext.linuxOnly': 'AI Account Switcher only supports WSL/Linux.',
+  'ext.linuxOnly': 'PlanSwap only supports WSL/Linux.',
   'ext.codexUnavailable': 'Codex account switching is unavailable: {error}',
 
   // Account name validation (add account)
@@ -209,7 +209,7 @@ export const zhCn: Record<MessageKey, string> = {
   'account.removeDirPrompt': '账号 {label} 已从列表移除。是否同时删除目录 {dir}？',
   'account.deleteDirFailed': '删除目录失败：{error}',
 
-  'ext.linuxOnly': 'AI 账号切换器仅支持 WSL/Linux。',
+  'ext.linuxOnly': 'PlanSwap仅支持 WSL/Linux。',
   'ext.codexUnavailable': 'Codex 账号切换不可用：{error}',
 
   'name.empty': '请输入账号名',

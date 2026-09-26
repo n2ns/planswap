@@ -19,8 +19,8 @@ export interface TempHome { home: string; restore(): void }
 export function makeTempHome(prefix: string): TempHome {
   const saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
   for (const k of ENV_KEYS) saved[k] = process.env[k];
-  // The prefix avoids selfCheck's own ai-switcher-codex-*, otherwise parallel tests would disturb its leftover check
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), `ai-switcher-test-${prefix}-`));
+  // The prefix avoids selfCheck's own planswap-codex-*, otherwise parallel tests would disturb its leftover check
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `planswap-test-${prefix}-`));
   process.env.HOME = home;
   delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.CODEX_HOME;

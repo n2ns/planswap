@@ -43,7 +43,7 @@ fi
 describe('state file', () => {
   test('missing → undefined', () => {
     assertTempHome(home);
-    assert.equal(STATE_FILE(), path.join(home, '.config', 'ai-switcher', 'codex-home'));
+    assert.equal(STATE_FILE(), path.join(home, '.config', 'planswap', 'codex-home'));
     assert.equal(readSelectedDir(), undefined);
   });
   test('atomic write: resolved path, 0600, directory 0700, no temp file left', () => {
@@ -73,17 +73,17 @@ describe('state file', () => {
 
 describe('rcBlock', () => {
   test('exact content', () => {
-    const expect = `# >>> ai-switcher codex >>>
-if [ -r "$HOME/.config/ai-switcher/codex-home" ]; then
-  _ai_switcher_codex_home="$(cat "$HOME/.config/ai-switcher/codex-home" 2>/dev/null)"
-  if [ -n "$_ai_switcher_codex_home" ] && [ -d "$_ai_switcher_codex_home" ]; then
-    export CODEX_HOME="$_ai_switcher_codex_home"
+    const expect = `# >>> planswap codex >>>
+if [ -r "$HOME/.config/planswap/codex-home" ]; then
+  _planswap_codex_home="$(cat "$HOME/.config/planswap/codex-home" 2>/dev/null)"
+  if [ -n "$_planswap_codex_home" ] && [ -d "$_planswap_codex_home" ]; then
+    export CODEX_HOME="$_planswap_codex_home"
   else
     unset CODEX_HOME
   fi
-  unset _ai_switcher_codex_home
+  unset _planswap_codex_home
 fi
-# <<< ai-switcher codex <<<
+# <<< planswap codex <<<
 `;
     assert.equal(rcBlock(), expect);
   });
@@ -349,7 +349,7 @@ describe('selfCheck (real bash -i -l, clean environment)', () => {
       process.env = saved;
     }
   };
-  const tmpDirs = (): string[] => fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('ai-switcher-codex-'));
+  const tmpDirs = (): string[] => fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith('planswap-codex-'));
   before(() => {
     fs.writeFileSync(bashrc, bashrcOrig, { mode: 0o600 });
     fs.writeFileSync(profile, profileOrig, { mode: 0o644 });

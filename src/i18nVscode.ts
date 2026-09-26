@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import { type Locale, setLocale } from './i18n';
 
-const SECTION = 'aiSwitcher';
+const SECTION = 'planswap';
 const KEY = 'language';
 
-/** Resolves the UI locale from `aiSwitcher.language`; `auto` follows the editor display language. */
+/** Resolves the UI locale from `planswap.language`; `auto` follows the editor display language. */
 export function resolveLocale(): Locale {
   const setting = vscode.workspace.getConfiguration(SECTION).get<string>(KEY, 'auto');
   if (setting === 'en' || setting === 'zh-cn') return setting;

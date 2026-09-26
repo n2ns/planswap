@@ -491,22 +491,22 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
     store.findByDir(effectiveDir()) ? store.all() : [...store.all(), { name: EXTERNAL_NAME, dir: effectiveDir() }];
 
   return [
-    vscode.commands.registerCommand('aiSwitcher.codex.enable', enable),
-    vscode.commands.registerCommand('aiSwitcher.codex.disable', disable),
-    vscode.commands.registerCommand('aiSwitcher.codex.switchAccount', async () => {
+    vscode.commands.registerCommand('planswap.codex.enable', enable),
+    vscode.commands.registerCommand('planswap.codex.disable', disable),
+    vscode.commands.registerCommand('planswap.codex.switchAccount', async () => {
       const a = await pickAccount(store.all().filter((x) => !(isEffective(x) && isSelected(x))), t('codex.pick.switch'));
       if (a) await switchTo(a);
     }),
-    vscode.commands.registerCommand('aiSwitcher.codex.addAccount', () => panel.focusAdd(MODE)),
-    vscode.commands.registerCommand('aiSwitcher.codex.removeAccount', async () => {
+    vscode.commands.registerCommand('planswap.codex.addAccount', () => panel.focusAdd(MODE)),
+    vscode.commands.registerCommand('planswap.codex.removeAccount', async () => {
       const a = await pickAccount(store.named().filter((x) => !isEffective(x) && !isSelected(x)), t('codex.pick.remove'));
       if (a) await removeAccount(a, false);
     }),
-    vscode.commands.registerCommand('aiSwitcher.codex.openTerminal', async () => {
+    vscode.commands.registerCommand('planswap.codex.openTerminal', async () => {
       const a = await pickAccount(allWithExternal(), t('codex.pick.terminal'));
       if (a) openTerminal(a, !codexLoggedIn(a.dir));
     }),
-    vscode.commands.registerCommand('aiSwitcher.codex.restartServer', restartServerInteractive),
+    vscode.commands.registerCommand('planswap.codex.restartServer', restartServerInteractive),
     vscode.window.onDidCloseTerminal((terminal) => {
       if (!terminals.delete(terminal)) return;
       panel.refresh();

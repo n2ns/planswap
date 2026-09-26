@@ -1,7 +1,7 @@
-# Claude Code Account Switcher Extension (WSL only): Design
+# PlanSwap (WSL only): Design
 
 Date: 2026-09-26
-Status: implemented (v8, 2026-09-26: shared and independent accounts: a shared account links everything except its login identity to the default account's directory, an independent one gets a one-time copy of its configuration (6.7); the "Sync rules" tool is replaced by "Sync shared" (called "Re-link" since the terminology change); the `default` account can no longer be renamed (only named accounts, see 6.5); v7, 2026-09-26: English docs + i18n: English / Simplified Chinese UI selected by the `aiSwitcher.language` setting, see 5.5; v6, 2026-09-26: footer toolbar and version card, per-page "Tools" row, global rules `CLAUDE.md` shared via symlinks, every registered account can be renamed, simplified account row UI; v5: single view with tabs + account display names + email and plan display; v4: sidebar changed from a native TreeView to a Webview panel. Contract in interfaces.md)
+Status: implemented (v8, 2026-09-26: shared and independent accounts: a shared account links everything except its login identity to the default account's directory, an independent one gets a one-time copy of its configuration (6.7); the "Sync rules" tool is replaced by "Sync shared" (called "Re-link" since the terminology change); the `default` account can no longer be renamed (only named accounts, see 6.5); v7, 2026-09-26: English docs + i18n: English / Simplified Chinese UI selected by the `planswap.language` setting, see 5.5; v6, 2026-09-26: footer toolbar and version card, per-page "Tools" row, global rules `CLAUDE.md` shared via symlinks, every registered account can be renamed, simplified account row UI; v5: single view with tabs + account display names + email and plan display; v4: sidebar changed from a native TreeView to a Webview panel. Contract in interfaces.md)
 
 ## 1. Goals and scope
 
@@ -72,7 +72,7 @@ An account is a directory:
 - A panel row (`AccountView`) carries both the internal name `name` and the display name `label`, plus `email`, `plan` (the formatted plan text) and, for named rows, `shared`.
 - Whether a named account is shared or independent is never stored: it is read from disk each time (the `projects` marker link, see 6.7).
 - The active sidebar tab is stored in the memento key `panel.activeTab` (`'claude' | 'codex'`, default `claude`), written by the frontend's `setTab` message.
-- The UI language is not stored by the extension: it is the VS Code setting `aiSwitcher.language` (see 5.5); the resolved locale is kept in memory and pushed to the Webview as `PanelState.locale`.
+- The UI language is not stored by the extension: it is the VS Code setting `planswap.language` (see 5.5); the resolved locale is kept in memory and pushed to the Webview as `PanelState.locale`.
 
 ## 5. User interface
 
@@ -80,7 +80,7 @@ An account is a directory:
 
 The sidebar was changed from a native TreeView to a `WebviewView` (the view is declared with `"type": "webview"` in `package.json`); the frontend uses the Web Components of @vscode-elements/elements (`vscode-button`, `vscode-checkbox`, `vscode-textfield`, `vscode-toolbar-button`, `vscode-icon`) and the @vscode/codicons icon font.
 
-- A new Activity Bar icon (`resources/account.svg`), container id `aiSwitcher`, title "AI Account Switcher" ("AI 账号切换器" in Chinese), containing the **only** view, id `aiSwitcher.accounts`, also named "AI Account Switcher". Both names come from `package.nls*.json` (see 5.5). `AccountsPanel` is instantiated once and holds both the Claude and the Codex `PanelSource`.
+- A new Activity Bar icon (`resources/account.svg`), container id `planswap`, title "PlanSwap" ("PlanSwap" in Chinese), containing the **only** view, id `planswap.accounts`, also named "PlanSwap". Both names come from `package.nls*.json` (see 5.5). `AccountsPanel` is instantiated once and holds both the Claude and the Codex `PanelSource`.
 - **Tab bar**: two tab buttons at the top of the panel, Claude / Codex (segmented control style), the selected one highlighted; a click makes the frontend switch rendering and send `setTab`; the host records it in the memento `panel.activeTab` and returns it as `PanelState.active` in later state pushes; the frontend also remembers the current tab in its Webview state and only adopts the host's `active` when it has no local record. The `focusAdd` message first switches to the given tab and then focuses that page's input. Codex page differences are in codex-design.md section 7.
 - The view title bar has only one button: `$(refresh)` refresh (refreshes both pages). Adding accounts happens inside the panel; the title bar no longer has an add button.
 - All colors come from the `--vscode-*` theme variables injected by the editor (or `color-mix` of them), so light and dark themes adapt automatically; plan colors (see below) have a separate set of values for light / high-contrast light themes.
@@ -127,7 +127,7 @@ The Claude page has four blocks from top to bottom (banner, account list, "Tools
 - Message types are defined in `src/protocol.ts`, shared by both sides; that file imports no runtime module:
   - Extension → frontend (`ToWebview`): `state` (the full `PanelState`: `active` current tab + `locale` UI language + the `TabState` of each page `claude`/`codex`, with account rows (named rows carry `shared`: `true` shared, `false` independent; `undefined` for the default and external rows), `enabled`, `switchedTo`, `pendingDir`), `addResult` (add result, with `error` on failure), `renameResult` (rename result, with the renamed row's `dir`, `error` on failure), `focusAdd` (switch to the tab and focus its add input), `versions` (list `items` of CLI and extension versions, shown by the frontend as the version card). `addResult`, `renameResult` and `focusAdd` carry `mode`.
   - Frontend → extension (`FromWebview`): `ready`, `setTab` (the host remembers the current tab), `switch`, `terminal`, `remove`, `rename` (all identify the account by its directory `dir`; `rename` also carries the new display name `label`), `add` (account name and `shared`, the checkbox state), `share` (convert an independent account, identified by `dir`), `reload`, `dismissBanner`, `enable`, `restartServer`, `tool` (with a `ToolId`: `openGlobalMd` / `openSettings` / `reloadWindow` / `restartExtHost` / `restartServer` / `cliVersions` / `sync` / `updateCli` / `openHelp` / `openStar`). Everything except `ready` carries `mode`, and the host dispatches by `mode` to the Claude or Codex handler (`setTab` only writes the memento); for the footer toolbar, the `tool` message's `mode` is the current tab.
-- After loading, the frontend sends `ready` and the extension immediately pushes `state`; it also pushes once whenever the panel becomes visible again. A change of any watched file of either page pushes the full `PanelState`, and so does a change of `aiSwitcher.language`.
+- After loading, the frontend sends `ready` and the extension immediately pushes `state`; it also pushes once whenever the panel becomes visible again. A change of any watched file of either page pushes the full `PanelState`, and so does a change of `planswap.language`.
 - When the extension receives `switch`/`terminal`/`remove`/`rename`/`share`, it first looks the directory up with `panel.resolve(mode, dir)` among the rows currently shown on that page and only accepts directories present in the list; `remove`, `rename` and `share` only act on rows with `kind === "named"`.
 
 ### 5.3 Content security policy
@@ -147,15 +147,15 @@ The Webview HTML carries a `Content-Security-Policy` meta tag:
 ### 5.4 Status bar
 
 - On the left it shows `$(account) Claude: <label>` (the alias for accounts that have one; the localized "External directory" when the current account is an external directory); the first tooltip line is the email ("Not logged in" when there is none), followed by ` · <plan>` when there is a plan; the second line is the directory.
-- A click opens the sidebar view container (command `workbench.view.extension.aiSwitcher`).
+- A click opens the sidebar view container (command `workbench.view.extension.planswap`).
 
 ### 5.5 Localization (i18n)
 
 - Languages: English (`en`) and Simplified Chinese (`zh-cn`).
-- Setting `aiSwitcher.language` (`contributes.configuration`, type string, enum `["auto", "en", "zh-cn"]`, default `"auto"`, scope `application`; enumDescriptions: auto = follow the VS Code display language, en = English, zh-cn = 简体中文).
+- Setting `planswap.language` (`contributes.configuration`, type string, enum `["auto", "en", "zh-cn"]`, default `"auto"`, scope `application`; enumDescriptions: auto = follow the VS Code display language, en = English, zh-cn = 简体中文).
 - Resolution: `auto` → `zh-cn` when `vscode.env.language` starts with `zh`, otherwise `en`; `en` / `zh-cn` are used as is.
 - Runtime strings follow the setting immediately, without a reload: on a change, the host calls `setLocale`, re-pushes the full `PanelState` (the Webview re-renders everything, including the add-section help text and the footer toolbar titles) and updates the status bar; subsequent notifications, modal dialogs, QuickPick lists and error reasons use the new language.
-- Static strings (`displayName`, `description`, command titles and categories, view container and view names, configuration titles and descriptions) use `%key%` placeholders in `package.json`, resolved from `package.nls.json` (English) and `package.nls.zh-cn.json` (Chinese). VS Code resolves these by **its own display language**, not by `aiSwitcher.language`; this is a platform limitation. English names: display name "PlanSwap: Claude Code & Codex Account Switcher"; container and view title "AI Account Switcher"; command categories "Claude Account", "Codex Account", "AI Account Switcher". The Chinese file keeps the Chinese titles ("AI 账号切换器", "Claude 账号", "Codex 账号", ...).
+- Static strings (`displayName`, `description`, command titles and categories, view container and view names, configuration titles and descriptions) use `%key%` placeholders in `package.json`, resolved from `package.nls.json` (English) and `package.nls.zh-cn.json` (Chinese). VS Code resolves these by **its own display language**, not by `planswap.language`; this is a platform limitation. English names: display name "PlanSwap: Claude Code & Codex Account Switcher"; container and view title "PlanSwap"; command categories "Claude Account", "Codex Account", "PlanSwap". The Chinese file keeps the Chinese titles ("PlanSwap", "Claude 账号", "Codex 账号", ...).
 - Host side: `src/i18n.ts` (no `vscode` import, so pure modules such as `paths.ts`, `labels.ts`, `codex/codexState.ts` can use it) holds the `en` and `zh-cn` tables and `t(key, params)` with `{name}` placeholders; `src/i18nVscode.ts` resolves the locale from the setting and watches it. Every user-visible host string goes through `t()`: messages, errors, warnings, modal text and buttons in `commands.ts`, `codex/codexCommands.ts`, `tools.ts`, `statusBar.ts`, `extension.ts`; reasons returned or thrown by pure modules (`paths.checkSafeToDelete`, `codexPaths.checkCodexSafeToDelete` and `copyCodexSeed` skip reasons, `codexState.preCheck` reasons and thrown errors, `codexServer.planRestart` errors, `labels.validate` messages); QuickPick labels and placeholders.
 - Webview side: `src/webview/i18n.ts` has its own `en` / `zh-cn` tables and a `t(key, params)` that uses the current `state.locale`. All Webview strings (tabs, section titles, banners, buttons, titles/tooltips, aria-labels, placeholders, help text, validation messages, version card, disabled Codex page, tools) go through it.
 - Key-parity rule: in both places the `en` table is the source of truth (`MessageKey = keyof typeof en`), and the `zh-cn` table is typed `Record<MessageKey, string>`, so a missing or extra key is a type error.
@@ -167,11 +167,11 @@ Panel actions call the flow functions inside `commands.ts` directly through Webv
 
 | Command id | Title | Behavior |
 |---|---|---|
-| `aiSwitcher.switchAccount` | Switch Account | Shows a QuickPick of the registered accounts that are not current; the selected one goes through 6.1 |
-| `aiSwitcher.addAccount` | Add Account (Focus Sidebar Input) | Only opens the sidebar and focuses the add input at the bottom, see 6.2 |
-| `aiSwitcher.removeAccount` | Delete Account | Shows a QuickPick of the non-default accounts; the selected one goes through 6.3 (modal confirmation) |
-| `aiSwitcher.openTerminal` | Run claude in Terminal with Account | Shows a QuickPick of the registered accounts (also the external directory when it is current), see 6.4 |
-| `aiSwitcher.refresh` | Refresh | Scans `~/.claude-*` to register unregistered directories, re-reads each directory's email and sign-in state, refreshes the panel and the status bar |
+| `planswap.switchAccount` | Switch Account | Shows a QuickPick of the registered accounts that are not current; the selected one goes through 6.1 |
+| `planswap.addAccount` | Add Account (Focus Sidebar Input) | Only opens the sidebar and focuses the add input at the bottom, see 6.2 |
+| `planswap.removeAccount` | Delete Account | Shows a QuickPick of the non-default accounts; the selected one goes through 6.3 (modal confirmation) |
+| `planswap.openTerminal` | Run claude in Terminal with Account | Shows a QuickPick of the registered accounts (also the external directory when it is current), see 6.4 |
+| `planswap.refresh` | Refresh | Scans `~/.claude-*` to register unregistered directories, re-reads each directory's email and sign-in state, refreshes the panel and the status bar |
 
 Each QuickPick item shows the display name (the alias for accounts that have one), the email ("Not logged in" when there is none) and the directory; when there is nothing to pick, the message "No accounts to choose from." is shown. Every message and terminal name uses the display name of the account; logic still uses name / dir.
 
@@ -190,7 +190,7 @@ Entry points: the row's switch button in the panel, double-clicking a non-curren
 
 ### 6.2 Add
 
-1. Entry point: the always-present input at the bottom of the panel. The Command Palette's `aiSwitcher.addAccount` only focuses that input: `panel.focusAdd('claude')` runs `aiSwitcher.accounts.focus` to open the panel and then sends `focusAdd` to the frontend (the frontend switches to the Claude tab and focuses the input).
+1. Entry point: the always-present input at the bottom of the panel. The Command Palette's `planswap.addAccount` only focuses that input: `panel.focusAdd('claude')` runs `planswap.accounts.focus` to open the panel and then sends `focusAdd` to the frontend (the frontend switches to the Claude tab and focuses the input).
 2. Live frontend validation (immediate hints, not authoritative): matches `^[A-Za-z0-9_-]+$`; not equal to `default`; not equal to the `name` or `label` of an account row currently shown (both comparisons ignore case). An empty input shows no error, it only disables the button.
 3. The frontend submits an `add` message; the extension performs the authoritative validation on the trimmed name and sends the reason back to the panel on failure:
    - empty: "Enter an account name";
@@ -251,8 +251,8 @@ On the host all tools are handled by `runTool(mode, tool, deps)` in `src/tools.t
 - `cliVersions`: runs `execFile('claude', ['--version'])` and `execFile('codex', ['--version'])` in parallel (no shell, 8-second timeout; ENOENT → "Not found", timeout → "Timed out", other → "Failed: <first line>"), then reads `vscode.extensions.getExtension('anthropic.claude-code' / 'openai.chatgpt')?.packageJSON.version` ("Not found" when absent). The panel entry sends a `versions` message through `deps.postVersions`, and the frontend expands the version card above the toolbar (title "CLI and extension versions" + close button; each of the four items on two vertical lines: label / value, the value in monospace and wrappable; clicking the info button again or close collapses it); the Command Palette entry (`postVersions` unset) shows a read-only QuickPick. No network access.
 - Per-page "Tools" row: `openGlobalMd` (Claude → `<currentDir()>/CLAUDE.md`, Codex → `<effectiveDir()>/AGENTS.md`; when missing, a modal asks "File does not exist. Create it?", and on confirmation an empty file is created with 0600 (at the link target when the file is a dangling symlink to a file of the same name) and then opened with `showTextDocument`), `openSettings` (`workbench.action.openSettings` with `claudeCode.` / `chatgpt.`), `sync` ("Re-link": takes the vendor's registered named directories (`deps.claudeDirs()` / `deps.codexDirs()`) and keeps the shared ones (`isSharedClaudeAccount` / `codexShareOps.isShared`); for each it runs the vendor's refresh (Claude: `ensureClaudeLinks` + `mirrorClaudeJson`; Codex: `ensureCodexLinks`) and formats the report with `describeShareReport`; independent accounts are not touched. With no shared accounts: "No linked <Claude|Codex> accounts to re-link."; otherwise "Re-linked N linked <vendor> account(s) to the default account.", as a warning followed by "Needs attention: <name>: <notes>; …" when an account reported something or failed (the name is the display name from `deps.labelOf(mode, dir)`, i.e. `labelFor` of the registered account with the directory basename as fallback; without `labelOf` the basename without `.claude-` / `.codex-`); when the directory list or the Codex operations are not provided: "The <vendor> part is not initialized; cannot re-link linked accounts.").
 - Both pages also offer `updateCli`: opens a new localized update terminal and sends `claude update` for Claude or `env -u CODEX_HOME codex update` for Codex, then shows the terminal. The Codex command avoids the selected account home during update of a default-home installation. No inspection step or account switch is performed; output and installer interaction remain in the terminal. This action has no Command Palette entry.
-- Command Palette entries (category "AI Account Switcher"): `aiSwitcher.tools.openClaudeMd`, `aiSwitcher.tools.openAgentsMd`, `aiSwitcher.tools.openSettings` (QuickPick Claude Code / Codex), `aiSwitcher.tools.reloadWindow`, `aiSwitcher.tools.restartExtHost`, `aiSwitcher.tools.cliVersions`, `aiSwitcher.tools.sync` ("Re-link Accounts to the Default Account", QuickPick Claude Code / Codex); restarting the WSL server reuses `aiSwitcher.codex.restartServer`.
-- When Codex initialization fails (exception caught in `extension.ts`): the Codex page degrades to `{ accounts: [], enabled: false }`, non-`tool` messages of the Codex page and the 7 `aiSwitcher.codex.*` commands show "Codex account switching is unavailable: <reason>" instead; `tool` messages still go through `runTool`, with `ToolDeps.codexRestart`, `codexDirs` and `codexShareOps` undefined.
+- Command Palette entries (category "PlanSwap"): `planswap.tools.openClaudeMd`, `planswap.tools.openAgentsMd`, `planswap.tools.openSettings` (QuickPick Claude Code / Codex), `planswap.tools.reloadWindow`, `planswap.tools.restartExtHost`, `planswap.tools.cliVersions`, `planswap.tools.sync` ("Re-link Accounts to the Default Account", QuickPick Claude Code / Codex); restarting the WSL server reuses `planswap.codex.restartServer`.
+- When Codex initialization fails (exception caught in `extension.ts`): the Codex page degrades to `{ accounts: [], enabled: false }`, non-`tool` messages of the Codex page and the 7 `planswap.codex.*` commands show "Codex account switching is unavailable: <reason>" instead; `tool` messages still go through `runTool`, with `ToolDeps.codexRestart`, `codexDirs` and `codexShareOps` undefined.
 
 ### 6.7 Shared and independent accounts
 
@@ -274,7 +274,7 @@ Goal: when one account runs out of quota, switch to another and keep working wit
 ## 7. Refresh triggers
 
 - `onDidChangeConfiguration` affecting `claudeCode.environmentVariables`: refresh the panel and the status bar.
-- `onDidChangeConfiguration` affecting `aiSwitcher.language`: set the new locale, re-push the full panel state and update the status bar.
+- `onDidChangeConfiguration` affecting `planswap.language`: set the new locale, re-push the full panel state and update the status bar.
 - Every account directory currently shown in the panel (including the external-directory row) has an account info file watcher: it watches `claudeJsonPath(dir, isExplicitConfigDir(dir))`, i.e. `createFileSystemWatcher(new RelativePattern(Uri.file(<its directory>), <file name>))`, and on create/change/delete pushes the panel state and updates the status bar. Watchers are added/removed according to the current account rows on each panel refresh.
 - Push the state once when the panel becomes visible again.
 - After adding or removing an account.
@@ -283,7 +283,7 @@ Goal: when one account runs out of quota, switch to another and keep working wit
 
 ## 8. Platform guard
 
-- On `activate`, if `process.platform !== "linux"`, show the warning "AI Account Switcher only supports WSL/Linux." once (localized) and do not register the Webview view, the status bar or commands.
+- On `activate`, if `process.platform !== "linux"`, show the warning "PlanSwap only supports WSL/Linux." once (localized) and do not register the Webview view, the status bar or commands.
 - `package.json` declares `extensionKind: ["workspace"]`, so in a WSL window the extension is installed and runs on the WSL side.
 
 ## 9. Code structure
@@ -294,7 +294,7 @@ The sidebar was changed from a native TreeView to a Webview; the former `account
 src/
   extension.ts        Activation, locale setup, platform guard, wiring of all modules (two LabelStores, one AccountsPanel, ToolDeps; degraded mode when Codex initialization fails), registration of the WebviewViewProvider and three command groups, watching setting changes
   i18n.ts             Host i18n tables (en / zh-cn) and t(); no vscode import
-  i18nVscode.ts       resolveLocale() / watchLocale() for aiSwitcher.language
+  i18nVscode.ts       resolveLocale() / watchLocale() for planswap.language
   paths.ts            Default directory, account directories, account info file location, reading email and plan (formatClaudePlan / readAccountInfo), signed-in state, directory scan, stripped settings copy (copySettingsStripped), add-only MCP server merge (syncMcpServers), delete safety checks
   claudeShare.ts      Shared vs independent accounts (6.7): shared entries, isSharedClaudeAccount, ensureClaudeLinks, mirrorClaudeJson, claudeAccountBusy, migrateClaudeToShared, copyClaudeIndependent, plus the link / merge helpers reused by codex/codexShare.ts; no vscode import
   shareReport.ts      describeShareReport: localized one-line summary of a share / migration report (both vendors); no vscode import
@@ -302,7 +302,7 @@ src/
   labels.ts           LabelStore: storage and validation of per-account display names (aliases), keyed by name in claude.labels / codex.labels; labelFor(name, labels) returns the display name
   claudeSettings.ts   Reads/writes CLAUDE_CONFIG_DIR in claudeCode.environmentVariables
   commands.ts         Switch (re-links a shared target first) / add (shared or independent) / share (conversion) / remove / open terminal / refresh / rename; handles Claude page messages (incl. tool); Command Palette entries
-  tools.ts            Tools: runTool (open the global rules file, open extension settings, reload window, restart extension host, restart WSL server, CLI and extension versions, sync shared accounts, update CLI, open GitHub help and repository) and registerToolCommands (aiSwitcher.tools.*)
+  tools.ts            Tools: runTool (open the global rules file, open extension settings, reload window, restart extension host, restart WSL server, CLI and extension versions, sync shared accounts, update CLI, open GitHub help and repository) and registerToolCommands (planswap.tools.*)
   accountsPanel.ts    Single WebviewViewProvider: holds the claude / codex PanelSources, generates the panel HTML and CSP, pushes the full PanelState (incl. locale), remembers the current tab, maintains file watchers for both watchTargets; claudePanelSource is defined here
   protocol.ts         Message types between the extension and the Webview (shared, no runtime imports)
   statusBar.ts        Status bar (shows alias, email and plan)
@@ -316,7 +316,7 @@ package.nls.json      English static strings for package.json
 package.nls.zh-cn.json  Chinese static strings for package.json
 ```
 
-`contributes` in `package.json`: `commands` (with icons, 19 in total: 5 "Claude Account", 7 "Codex Account", 7 "AI Account Switcher"), `configuration` (`aiSwitcher.language`), `viewsContainers.activitybar`, `views` (a single `type: "webview"` view `aiSwitcher.accounts`, named "AI Account Switcher"), `menus.view/title` (only the refresh button, `when: view == aiSwitcher.accounts`). All user-facing static strings are `%key%` placeholders resolved from `package.nls*.json`. All commands stay in the Command Palette; no `menus.commandPalette` is declared; no `viewsWelcome` is declared.
+`contributes` in `package.json`: `commands` (with icons, 19 in total: 5 "Claude Account", 7 "Codex Account", 7 "PlanSwap"), `configuration` (`planswap.language`), `viewsContainers.activitybar`, `views` (a single `type: "webview"` view `planswap.accounts`, named "PlanSwap"), `menus.view/title` (only the refresh button, `when: view == planswap.accounts`). All user-facing static strings are `%key%` placeholders resolved from `package.nls*.json`. All commands stay in the Command Palette; no `menus.commandPalette` is declared; no `viewsWelcome` is declared.
 
 ## 10. Dependencies and build
 
@@ -345,7 +345,7 @@ package.nls.zh-cn.json  Chinese static strings for package.json
 6. Signing in from a terminal requires a `claude` command on PATH; signing in from the panel does not.
 7. The extension depends on the official extension's behavior for `claudeCode.environmentVariables`; if the official extension changes the semantics of this setting, switching stops working, but no credentials are damaged.
 8. When `claude` is run in a terminal for a non-default account, the `/ide` integration is expected not to work (see fact 8); the native panel is not affected.
-9. Command titles, categories and the view name follow VS Code's display language, not `aiSwitcher.language` (platform limitation, see 5.5); with a mismatched setting, the Command Palette and the panel may show different languages.
+9. Command titles, categories and the view name follow VS Code's display language, not `planswap.language` (platform limitation, see 5.5); with a mismatched setting, the Command Palette and the panel may show different languages.
 10. MCP servers copied or mirrored from the default account (6.2 step 5, 6.7): OAuth tokens of remote MCP servers live in each account's `.credentials.json`, which is never read, copied or linked, so such servers must be authorized again in each account; MCP `env` values (possibly API keys) are copied in plain text into the other accounts' `.claude.json`. For independent accounts nothing is removed later, so a server deleted from the default account stays there; shared accounts follow deletions on the next refresh. Running sessions keep their MCP list until a new session starts.
 11. Shared accounts are only re-linked and mirrored when adding, before switching, by "Re-link" and after a conversion; a link Claude Code replaced by a regular file in between is only repaired then: `history.jsonl` (e.g. after `claude project purge`, fact 11) is merged back by appending, so purged lines stay in the shared history; any other replaced entry is only reported as the account's own and must be merged by hand.
 12. Resuming a session that another account started may fail: transcripts carry no account id and `--resume` does not check (fact 12), but content bound to another organization can be rejected by the server.
