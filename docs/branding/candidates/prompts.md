@@ -1,6 +1,6 @@
 # PlanSwap icon candidates
 
-Generated using the built-in imagegen tool. PNG exports are 1024 x 1024 pixels. The selected version is [Variant C with a small AI sparkle and opaque navy background](planswap-c-ai-solid.png), copied to [resources/icon.png](../../../resources/icon.png) for the extension manifest and README. Earlier candidates are retained for reference and excluded from the VSIX package. The activity bar uses the matching monochrome [resources/account.svg](../../../resources/account.svg).
+Generated using the built-in imagegen tool. PNG exports are 1024 x 1024 pixels. The selected version is [Variant C with a small AI sparkle and opaque navy background](planswap-c-ai-solid.png), resized to 256 x 256 pixels as [resources/icon.png](../../../resources/icon.png) for the extension manifest and README. Earlier candidates are retained for reference and excluded from the VSIX package. The activity bar uses the matching monochrome [resources/account.svg](../../../resources/account.svg).
 
 ## Variant A
 
