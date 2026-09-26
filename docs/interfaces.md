@@ -113,17 +113,34 @@ export async function setConfigDir(dir: string | undefined): Promise<void>; // b
 export function affectsSetting(e: vscode.ConfigurationChangeEvent): boolean; // e.affectsConfiguration('claudeCode.environmentVariables')
 ```
 
+## src/fileState.ts (depends only on the vscode Memento type)
+
+```ts
+export const STATE_JSON: () => string;   // path.join(os.homedir(), '.config', 'planswap', 'state.json')
+export const STATE_KEYS: readonly ['accounts', 'ignoredDirs', 'claude.labels', 'codex.accounts', 'codex.ignoredDirs', 'codex.labels'];
+export class FileMemento implements vscode.Memento {
+  constructor(file?: string);            // default STATE_JSON()
+  keys(): readonly string[];
+  get<T>(key: string): T | undefined;
+  get<T>(key: string, defaultValue: T): T; // reads the file on every call (missing / half-written / non-object → empty); own properties only (Object.hasOwn)
+  update(key: string, value: unknown): Promise<void>; // undefined deletes the key; rewrites the whole object atomically (temp file 0600 + rename, directory 0700, pretty JSON)
+  exists(): boolean;                      // fs.existsSync(file)
+  importOnce(source: vscode.Memento): Promise<void>; // when !exists(): copies every STATE_KEYS entry that source has (undefined skipped) and writes the file (empty object when nothing); otherwise no-op
+}
+```
+The stores below receive this Memento instead of `ctx.globalState` (design.md section 4).
+
 ## src/accounts.ts (imports vscode only for the Memento type)
 
 ```ts
 import type { Account } from './paths';
 export class AccountStore {
   constructor(state: vscode.Memento);
-  named(): Account[];                 // non-default accounts in globalState 'accounts', sorted by name
+  named(): Account[];                 // non-default accounts in state key 'accounts', sorted by name
   all(): Account[];                   // [{name: DEFAULT_NAME, dir: defaultDir()}, ...named()]
   find(name: string): Account | undefined;   // searches all()
   findByDir(dir: string): Account | undefined; // samePath match in all()
-  add(account: Account): Promise<void>;       // also removes the directory from globalState 'ignoredDirs'
+  add(account: Account): Promise<void>;       // also removes the directory from state key 'ignoredDirs'
   remove(name: string): Promise<void>;        // also records the directory in 'ignoredDirs'
   unignore(dir: string): Promise<void>;       // removes the directory from 'ignoredDirs'; called after deleteAccountDir succeeds
   syncWithDisk(labels?: LabelStore): Promise<void>; // first prunes named entries whose dir does not exist (!fs.existsSync; labels?.remove(name); not added to 'ignoredDirs'),
@@ -139,7 +156,7 @@ export const EXTERNAL_NAME = '<external>'; // internal sentinel name of the exte
 
 export class LabelStore {
   constructor(state: vscode.Memento, key: 'claude.labels' | 'codex.labels');
-  // storage: globalState[key] is Record<string /*name*/, string /*label*/>, keyed by account name
+  // storage: state[key] (the FileMemento) is Record<string /*name*/, string /*label*/>, keyed by account name
   get(name: string): string | undefined;                       // undefined when not set; own properties only (Object.hasOwn), so names such as constructor / toString / __proto__ are safe
   // set rebuilds the record with Object.fromEntries so a __proto__ name is stored as an ordinary own key (survives the JSON round-trip)
   set(name: string, label: string | undefined): Promise<void>; // undefined / empty / equal to name → delete the entry
@@ -328,7 +345,7 @@ export function shQuote(s: string): string;
 export async function activate(ctx: vscode.ExtensionContext): Promise<void>;
 export function deactivate(): void;
 ```
-`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "PlanSwap only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(ctx.globalState, 'codex.labels')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined, codexShareOps: codex ? { isShared: isSharedCodexAccount, refresh: ensureCodexLinks } : undefined, labelOf: (mode, dir) => labelFor of store.findByDir(dir) / codex.store.findByDir(dir) with claudeLabels / codexLabels, else path.basename(dir) }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `planswap.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
+`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "PlanSwap only supports WSL/Linux.", then return) → `state = new FileMemento()` → `await state.importOnce(ctx.globalState)` → `new AccountStore(state)` → `claudeLabels = new LabelStore(state, 'claude.labels')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(state, 'codex.labels')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`new CodexAccountStore(state)` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined, codexShareOps: codex ? { isShared: isSharedCodexAccount, refresh: ensureCodexLinks } : undefined, labelOf: (mode, dir) => labelFor of store.findByDir(dir) / codex.store.findByDir(dir) with claudeLabels / codexLabels, else path.basename(dir) }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `planswap.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
 
 ## src/tools.ts (tools: footer toolbar and per-page "Tools" row, 2026-09-26)
 

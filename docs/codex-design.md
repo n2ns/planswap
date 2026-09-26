@@ -127,7 +127,7 @@ fi
 
 ## 6. Data model
 
-- `globalState`:
+- State file `~/.config/planswap/state.json` (the `FileMemento` of `fileState.ts`, see design.md section 4; not `globalState`, which is client-side and shared by every WSL distribution):
   - `codex.accounts`: `Array<{ name, dir }>`, the list of non-default accounts.
   - `codex.ignoredDirs`: directories of accounts removed while keeping the directory; automatic scanning skips them.
   - `codex.labels`: per-account display names (aliases), `Record<string /*name*/, string /*label*/>`, keyed by account name; no entry means not set (the name is shown). Stored and validated by the `LabelStore` in `labels.ts` with the same rules as on the Claude side (see design.md section 4): every named account can have an alias, the default account and the external-directory row cannot; must not equal the name or label of another Codex account; display-only, the directory does not change; when adding an account the name must not equal the name or label of any Codex account (compared case-insensitively); removing an account clears its alias. Independent of `claude.labels`; the same name is allowed on both sides.

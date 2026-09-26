@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { AccountStore } from './accounts';
 import { AccountsPanel, VIEW_ID, claudePanelSource, type PanelSource } from './accountsPanel';
 import { LabelStore, labelFor } from './labels';
+import { FileMemento } from './fileState';
 import { ensureCodexLinks, isSharedCodexAccount } from './codex/codexShare';
 import { StatusBar } from './statusBar';
 import { registerCommands } from './commands';
@@ -20,10 +21,14 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     void vscode.window.showWarningMessage(t('ext.linuxOnly'));
     return;
   }
-  const store = new AccountStore(ctx.globalState);
-  const claudeLabels = new LabelStore(ctx.globalState, 'claude.labels');
+  // Account lists, ignore lists and aliases live in ~/.config/planswap/state.json so they follow the WSL distribution;
+  // globalState is stored on the client and would be shared by every distro. Existing globalState data is imported once
+  const state = new FileMemento();
+  await state.importOnce(ctx.globalState);
+  const store = new AccountStore(state);
+  const claudeLabels = new LabelStore(state, 'claude.labels');
   await store.syncWithDisk(claudeLabels);
-  const codexLabels = new LabelStore(ctx.globalState, 'codex.labels');
+  const codexLabels = new LabelStore(state, 'codex.labels');
   const statusBar = new StatusBar(store, claudeLabels);
 
   // A Codex init failure is only logged and does not affect Claude: the Codex tab renders as "not enabled, no accounts"
@@ -31,7 +36,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   let codexSource: PanelSource = { accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] };
   let codexInitError: string | undefined;
   try {
-    const codexStore = new CodexAccountStore(ctx.globalState);
+    const codexStore = new CodexAccountStore(state);
     await codexStore.syncWithDisk(codexLabels);
     codexSource = codexPanelSource(codexStore, codexLabels);
     codex = { store: codexStore, labels: codexLabels };

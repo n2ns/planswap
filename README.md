@@ -131,6 +131,7 @@ Sign-in, CLI updates and AI requests are handled by the official Claude Code and
 
 - **Claude**: remove the `CLAUDE_CONFIG_DIR` entry from `claudeCode.environmentVariables` in the WSL remote settings.
 - **Codex**: run **Codex Account: Disable Codex Account Switching**, which removes the marker blocks and the state file.
+- The extension's own data (account lists, display names) is in `~/.config/planswap/state.json`; delete it if you want a clean slate.
 - Account directories (`~/.claude-<name>`, `~/.codex-<name>`) are never deleted automatically.
 
 ## Documentation

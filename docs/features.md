@@ -9,7 +9,7 @@ This document describes the extension's behavior feature by feature. The impleme
 | `default` | `~/.claude`; if the extension host environment already has `CLAUDE_CONFIG_DIR`, that value wins | Always exists, cannot be removed |
 | `<name>` | `~/.claude-<name>` | Created with "Add account", or registered by auto-discovery |
 
-- The account list is stored in the extension's `globalState` under the `accounts` key; only non-default accounts (`{ name, dir }`) are stored, and the default account is always prepended at runtime. A named account whose directory no longer exists (deleted or renamed outside the extension) is removed from the list on activation and on refresh (see section 5).
+- The account list is stored in the state file `~/.config/planswap/state.json` under the `accounts` key (the file follows the WSL distribution; it is not stored in VS Code's `globalState`, which is kept on the Windows side and shared by every distro; data of an earlier version is imported from `globalState` once, on the first activation without the file); only non-default accounts (`{ name, dir }`) are stored, and the default account is always prepended at runtime. A named account whose directory no longer exists (deleted or renamed outside the extension) is removed from the list on activation and on refresh (see section 5).
 - Account names and display names are compared **ignoring case** when checking for duplicates (`Work` and `work` clash); accounts registered before this rule are left as they are.
 - The **current account** is determined solely by the `CLAUDE_CONFIG_DIR` entry in `claudeCode.environmentVariables`:
   - Both the array form `[{ "name": ..., "value": ... }]` and the object form `{ "KEY": value }` are accepted; non-string values are converted to strings; an empty string counts as no entry.
@@ -19,7 +19,7 @@ This document describes the extension's behavior feature by feature. The impleme
 - Email and plan come from `oauthAccount` in the account info file (usually `<dir>/.claude.json`, see section 6): the email is `emailAddress`; the plan is formatted from `organizationType` and `organizationRateLimitTier` (`claude_max` → `Max`, `claude_pro` → `Pro`, `claude_team`/`team` → `Team`, `claude_enterprise`/`enterprise` → `Enterprise`, other values lose the `claude_` prefix and are capitalized; a trailing `_<n>x` of the tier becomes `<n>x`; combined as e.g. `Max 20x`; nothing is shown when both are empty). Read-only, never copied. A missing, half-written or unparsable file counts as "unknown" without an error.
 - Signed-in state: an email is the primary criterion; without an email, an existing `.credentials.json` also counts as signed in (only the file's existence is checked, its content is never read).
 - **Shared and independent accounts**: every named account is either **shared** (everything except its login identity is symlinked to the default account's directory, so settings, rules, history and sessions carry over when you switch, e.g. because one account ran out of quota) or **independent** (the default account's configuration is copied once when the account is created; history and sessions stay separate). The choice is made when adding (see 2.5); an independent account can later be converted into a shared one (see 4.6), not the other way round. The mode is never stored: an account is shared when its `projects` entry is a symlink resolving to the default directory's `projects` (details in section 5). User-facing term: the UI calls a shared account a "linked account" ("链接账号"); the code and these documents keep "shared" as the internal term.
-- **Account display names (aliases)**: every named account can have an alias; the default row and the external-directory row cannot (the default account is always shown as `default`, and an alias stored for it by an earlier version is ignored). Aliases are stored by account name in `globalState` `claude.labels` (`Record<account name, alias>`); no entry means not set (the account name itself is shown). Aliases are display-only (sidebar, status bar, QuickPick, messages, terminal names); the directory and internal name do not change, and logic still uses the internal name and directory. How to set one: see 2.7; removing an account also clears its alias.
+- **Account display names (aliases)**: every named account can have an alias; the default row and the external-directory row cannot (the default account is always shown as `default`, and an alias stored for it by an earlier version is ignored). Aliases are stored by account name in the state file under `claude.labels` (`Record<account name, alias>`); no entry means not set (the account name itself is shown). Aliases are display-only (sidebar, status bar, QuickPick, messages, terminal names); the directory and internal name do not change, and logic still uses the internal name and directory. How to set one: see 2.7; removing an account also clears its alias.
 
 ## 2. Sidebar
 
@@ -135,7 +135,7 @@ After clicking the pencil icon of a named account row, the row's name turns into
   - same as the account name of another account on this page: "Same as an existing account name";
   - same as the display name of another account on this page: "Same as an existing account's display name".
   Both duplicate checks ignore case. The account itself is excluded from the checks, so entering its own account name or current alias passes; the same name is allowed across the Claude and Codex pages.
-- When valid, the alias is written to `globalState` by account name (entering the account's own name clears the alias), the panel and the status bar are refreshed, and edit state ends; the list, the status bar and the QuickPick show the new alias right away.
+- When valid, the alias is written to the state file by account name (entering the account's own name clears the alias), the panel and the status bar are refreshed, and edit state ends; the list, the status bar and the QuickPick show the new alias right away.
 - The directory and internal name do not change; the `default` row still cannot be removed.
 
 ## 3. Status bar
@@ -283,7 +283,7 @@ Then the home directory is scanned; a directory that meets all of the following 
 - it is not in the ignore list (directories kept when removing an account go into the ignore list);
 - its name does not equal, ignoring case, the name or display name (alias) of an existing account (including `default`); such a directory is skipped until the conflict is gone (e.g. `~/.claude-xiaoni` is skipped while `Xiaoni` is registered). Of two scanned directories whose names differ only in case, only the first one found is registered.
 
-The account name is the basename without the `.claude-` prefix. This keeps the list from becoming empty when `globalState` is lost and also adopts manually created directories.
+The account name is the basename without the `.claude-` prefix. This keeps the list from becoming empty when the state file is lost and also adopts manually created directories.
 
 ### Keys stripped when copying settings
 
@@ -365,7 +365,7 @@ When they pass, it is deleted with Node's `fs.rm(dir, { recursive: true, force: 
   - the official panels of all windows refresh the account shown in their headers;
   - this extension's sidebar and status bar in other windows update when that window receives the setting-change event (not specifically verified across windows; click refresh if they do not update);
   - sessions already open in each window keep using the old account and each window must be reloaded separately. The reload banner (or the notification when the panel is not visible) only appears in the window that performed the switch.
-- The account list lives in `globalState`; accounts added in one window are not guaranteed to show up in other windows immediately; click refresh or reload the window.
+- The account list lives in the state file `~/.config/planswap/state.json`, read on every access, so other windows (including other editors on the same distro) see accounts added elsewhere on their next refresh; click refresh or reload the window when a list looks stale.
 - `planswap.language` has `application` scope, so a change applies to every window.
 
 ## 9. Platform guard
@@ -386,7 +386,7 @@ If the Codex part fails to initialize on activation (e.g. an rc file is unreadab
 | `default` | `~/.codex` (fixed, ignores environment variables) | Always exists, cannot be removed; effective when the state file is empty |
 | `<name>` | `~/.codex-<name>` | Created with "Add account", or registered by auto-discovery (same rules as section 5, basename matches `^\.codex-[A-Za-z0-9_-]+$`) |
 
-- The account list is stored in `globalState` `codex.accounts`, the ignore list in `codex.ignoredDirs`, with the same semantics as on the Claude side (entries whose directory no longer exists are pruned on activation and refresh and their alias is cleared; auto-discovery skips a name equal, ignoring case, to the name or display name of an existing Codex account; a deleted directory leaves the ignore list). Account names and display names are compared ignoring case when checking for duplicates.
+- The account list is stored in the state file `~/.config/planswap/state.json` under `codex.accounts`, the ignore list under `codex.ignoredDirs`, with the same semantics as on the Claude side (entries whose directory no longer exists are pruned on activation and refresh and their alias is cleared; auto-discovery skips a name equal, ignoring case, to the name or display name of an existing Codex account; a deleted directory leaves the ignore list). Account names and display names are compared ignoring case when checking for duplicates.
 - The **selected account** is whatever the state file `~/.config/planswap/codex-home` says (content is the absolute path of the directory, empty means the default account; shared across windows, the last writer wins).
 - The **directory effective in this window** = the extension host's own `process.env.CODEX_HOME`, or `~/.codex` when empty. The panel marks it as "current". When the effective directory does not correspond to any registered account, an "External directory" row is appended to the list and marked current.
 - Signed-in state: whether `<dir>/auth.json` exists.
@@ -396,7 +396,7 @@ If the Codex part fails to initialize on activation (e.g. an rc file is unreadab
   - when the JSON is damaged or being written, email and plan are unknown but the account still counts as signed in;
   - the raw `access_token`/`refresh_token`/`id_token` are never stored, cached or output.
 - Every named Codex account is shared or independent, as on the Claude side (see 1); the marker is `sessions` (a symlink resolving to `~/.codex/sessions`), and the entries are listed in 10.12.
-- Each account's display name (alias) is stored by account name in `globalState` `codex.labels`, with the same rules as on the Claude side (see 1 and 2.7); the aliases of both sides are independent, and the same name is allowed across Claude and Codex.
+- Each account's display name (alias) is stored by account name in the state file under `codex.labels`, with the same rules as on the Claude side (see 1 and 2.7); the aliases of both sides are independent, and the same name is allowed across Claude and Codex.
 
 ### 10.2 Codex tab in the sidebar
 
