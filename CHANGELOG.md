@@ -2,11 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Older Antigravity releases (`~/.antigravity-server`) are recognized as Antigravity.
-- Editor detection no longer falls back to manual instructions when `$HOME` is reached through a symlink.
-
 ## [0.1.1] - 2026-09-26
 
 ### Fixed
@@ -14,6 +9,8 @@
 - **Codex server restart across editors**: the editor is detected from the WSL server's data directory under `~` (whitelist). Antigravity (`~/.antigravity-ide-server`) and VSCodium (`~/.vscodium-server`) keep the automatic restart. VS Code (`~/.vscode-server`) and unrecognized editors are never restarted automatically; switching and **Restart WSL Server** show manual instructions instead (close all windows connected to the distro, then reopen).
 - The server commit is now read from the server's `product.json` instead of the command line.
 - Confirmation and restart messages name the detected editor instead of always saying "Antigravity".
+- Older Antigravity releases (`~/.antigravity-server`) are recognized as Antigravity.
+- Editor detection no longer falls back to manual instructions when `$HOME` is reached through a symlink.
 
 ## [0.1.0] - 2026-09-26
 
