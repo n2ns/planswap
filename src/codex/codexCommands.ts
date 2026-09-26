@@ -16,7 +16,7 @@ import {
   deleteCodexDir,
   ensureCodexDir,
 } from './codexPaths';
-import { codexAccountBusy, copyCodexIndependent, ensureCodexLinks, isSharedCodexAccount, migrateCodexToShared } from './codexShare';
+import { codexAccountBusy, copyCodexIndependent, ensureCodexLinks, isSharedCodexAccount, makeCodexIndependent, migrateCodexToShared } from './codexShare';
 import { describeShareReport } from '../shareReport';
 import {
   STATE_FILE,
@@ -363,6 +363,31 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
     panel.refresh();
   }
 
+  // Converts a shared account back to an independent one after a modal confirmation; sessions stay in ~/.codex
+  async function unshareAccount(account: CodexAccount): Promise<void> {
+    if (account.name === CODEX_DEFAULT_NAME || !isSharedCodexAccount(account.dir)) return;
+    if (isEffective(account) || isSelected(account)) {
+      void vscode.window.showWarningMessage(t('unshare.current', { label: labelOf(account) }));
+      return;
+    }
+    const ok = t('unshare.confirmButton');
+    const picked = await vscode.window.showWarningMessage(t('unshare.confirmCodex', { label: labelOf(account), dir: account.dir }), { modal: true }, ok);
+    if (picked !== ok) return;
+    if (codexAccountBusy(account.dir)) {
+      void vscode.window.showWarningMessage(t('share.busyCodex', { name: labelOf(account) }));
+      return;
+    }
+    try {
+      const r = makeCodexIndependent(account.dir);
+      const done = t('unshare.done', { label: labelOf(account), removed: r.removed.length, copied: r.copied.join(', ') || t('unshare.nothingCopied') });
+      const skipped = r.skipped.length ? t('unshare.skipped', { list: r.skipped.map((s) => `${s.file} (${s.reason})`).join(', ') }) : '';
+      void vscode.window.showInformationMessage([done, skipped].filter(Boolean).join(' '));
+    } catch (err) {
+      void vscode.window.showErrorMessage(t('unshare.failed', { label: labelOf(account), error: errText(err) }));
+    }
+    panel.refresh();
+  }
+
   // confirmed: the panel already did an inline confirmation; Command Palette entries need a modal confirmation
   async function removeAccount(account: CodexAccount, confirmed: boolean): Promise<void> {
     if (account.name === CODEX_DEFAULT_NAME || !store.find(account.name)) return;
@@ -442,6 +467,11 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
       case 'share': {
         const a = panel.resolve(MODE, msg.dir);
         if (a?.kind === 'named') await shareAccount(a);
+        return;
+      }
+      case 'unshare': {
+        const a = panel.resolve(MODE, msg.dir);
+        if (a?.kind === 'named') await unshareAccount(a);
         return;
       }
       case 'rename':

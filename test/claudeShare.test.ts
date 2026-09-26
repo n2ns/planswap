@@ -2,14 +2,14 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { setLocale } from '../src/i18n';
+import { setLocale, t } from '../src/i18n';
 import { execFileSync } from 'node:child_process';
 import {
   CLAUDE_SHARED_ENTRIES, claudeAccountBusy, copyClaudeIndependent, ensureClaudeLinks, isSharedClaudeAccount,
-  mergeEntry, migrateClaudeToShared, mirrorClaudeJson, type MigrateReport,
+  makeClaudeIndependent, mergeEntry, migrateClaudeToShared, mirrorClaudeJson, type MigrateReport,
 } from '../src/claudeShare';
 import { accountDir, deleteAccountDir } from '../src/paths';
-import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
+import { assertTempHome, makeTempHome, mode, read, snapshot, type TempHome } from './helpers';
 
 let tmp: TempHome;
 let home: string;
@@ -476,6 +476,123 @@ describe('copyClaudeIndependent', () => {
 
     // Second run copies nothing new
     assert.deepEqual(copyClaudeIndependent(path.join(home, '.claude.json'), acc).copied, []);
+  });
+});
+
+describe('makeClaudeIndependent', () => {
+  const src = (): string => path.join(home, '.claude.json');
+
+  test('removes the links, copies the config once, leaves history and the default dir alone', () => {
+    write(path.join(def, 'settings.json'), JSON.stringify({ model: 'm', enabledPlugins: { p: true }, env: { A: '1' } }));
+    write(path.join(def, 'CLAUDE.md'), 'rules');
+    write(path.join(def, 'rules', 'r.md'), 'r');
+    write(path.join(def, 'skills', 'one', 'SKILL.md'), '1');
+    write(path.join(def, 'skills', 'synced', 'x'), 's');
+    write(path.join(def, 'plugins', 'installed_plugins.json'), '{}');
+    write(path.join(def, 'history.jsonl'), '{"d":1}\n');
+    write(path.join(def, 'projects', 'p', 'x.jsonl'), 'x');
+    write(path.join(def, '.credentials.json'), 'def secret');
+    write(src(), JSON.stringify({ mcpServers: { m: { command: 'm' } } }));
+    const acc = accountDir('a');
+    fs.mkdirSync(acc, { mode: 0o700 });
+    ensureClaudeLinks(acc);
+    write(path.join(acc, '.credentials.json'), 'secret');
+    write(path.join(acc, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'a@x' } }));
+    write(path.join(acc, 'skills', 'mine', 'SKILL.md'), 'M');
+    const before = snapshot(def);
+
+    const r = makeClaudeIndependent(src(), acc);
+    assert.equal(isSharedClaudeAccount(acc), false);
+    for (const { name } of CLAUDE_SHARED_ENTRIES) assert.ok(r.removed.includes(name), name);
+    assert.ok(r.removed.includes('skills/one'));
+    assert.ok(r.removed.includes('plugins/installed_plugins.json'));
+    assert.ok(!r.removed.includes('skills/mine'));
+    // The config folders ensureClaudeLinks created empty in the default dir are copied as empty folders
+    assert.deepEqual(r.copied, ['settings.json', 'CLAUDE.md', 'agents', 'commands', 'output-styles', 'hooks', 'rules', 'skills/one', 'mcpServers']);
+    for (const e of fs.readdirSync(acc, { recursive: true }) as string[]) {
+      assert.ok(!fs.lstatSync(path.join(acc, e)).isSymbolicLink(), `${e} is still a link`);
+    }
+    for (const e of ['history.jsonl', 'projects', 'sessions', 'todos', 'file-history']) assert.ok(!exists(path.join(acc, e)), e);
+    assert.deepEqual(JSON.parse(read(path.join(acc, 'settings.json'))), { model: 'm', env: { A: '1' } });
+    assert.equal(read(path.join(acc, 'CLAUDE.md')), 'rules');
+    assert.equal(read(path.join(acc, 'rules', 'r.md')), 'r');
+    assert.equal(read(path.join(acc, 'skills', 'one', 'SKILL.md')), '1');
+    assert.equal(read(path.join(acc, 'skills', 'mine', 'SKILL.md')), 'M');
+    assert.ok(!exists(path.join(acc, 'skills', 'synced')));
+    assert.ok(fs.lstatSync(path.join(acc, 'plugins')).isDirectory());
+    assert.deepEqual(fs.readdirSync(path.join(acc, 'plugins')), []);
+    assert.equal(read(path.join(acc, '.credentials.json')), 'secret');
+    const json = JSON.parse(read(path.join(acc, '.claude.json')));
+    assert.deepEqual(json.oauthAccount, { emailAddress: 'a@x' });
+    assert.deepEqual(json.mcpServers, { m: { command: 'm' } });
+    assert.deepEqual(snapshot(def), before);
+  });
+
+  test('an entry the account replaced by a real file or a link elsewhere is kept', () => {
+    write(path.join(def, 'CLAUDE.md'), 'rules');
+    fs.mkdirSync(path.join(home, 'elsewhere'));
+    const acc = accountDir('a');
+    fs.mkdirSync(acc, { mode: 0o700 });
+    ensureClaudeLinks(acc);
+    fs.unlinkSync(path.join(acc, 'CLAUDE.md'));
+    write(path.join(acc, 'CLAUDE.md'), 'own');
+    fs.unlinkSync(path.join(acc, 'agents'));
+    fs.symlinkSync(path.join(home, 'elsewhere'), path.join(acc, 'agents'));
+    const r = makeClaudeIndependent(path.join(home, '.claude.json'), acc);
+    assert.ok(!r.removed.includes('CLAUDE.md'));
+    assert.ok(!r.removed.includes('agents'));
+    assert.ok(!r.copied.includes('CLAUDE.md'));
+    assert.equal(read(path.join(acc, 'CLAUDE.md')), 'own');
+    assert.equal(fs.readlinkSync(path.join(acc, 'agents')), path.join(home, 'elsewhere'));
+    assert.equal(isSharedClaudeAccount(acc), false);
+    assert.equal(read(path.join(def, 'CLAUDE.md')), 'rules');
+  });
+
+  test('a whole-folder skills link from an earlier version is removed as one entry and replaced by copies', () => {
+    write(path.join(def, 'skills', 'one', 'SKILL.md'), '1');
+    write(path.join(def, 'projects', 'p', 'x.jsonl'), 'x');
+    const acc = accountDir('legacy');
+    fs.mkdirSync(acc, { mode: 0o700 });
+    ensureClaudeLinks(acc);
+    fs.rmSync(path.join(acc, 'skills'), { recursive: true });
+    fs.symlinkSync(path.join(def, 'skills'), path.join(acc, 'skills'));
+    const before = snapshot(def);
+    const r = makeClaudeIndependent(src(), acc);
+    assert.ok(r.removed.includes('skills'));
+    assert.ok(!r.removed.includes('skills/one'));
+    assert.ok(r.copied.includes('skills/one'));
+    assert.ok(fs.lstatSync(path.join(acc, 'skills')).isDirectory());
+    assert.equal(read(path.join(acc, 'skills', 'one', 'SKILL.md')), '1');
+    assert.deepEqual(snapshot(def), before);
+  });
+
+  test('a failed copy leaves the account shared: the history links and the projects marker are still there', () => {
+    write(path.join(def, 'settings.json'), '{"model":"m"}');
+    write(path.join(def, 'history.jsonl'), '{"d":1}\n');
+    write(path.join(def, 'projects', 'p', 'x.jsonl'), 'x');
+    write(src(), JSON.stringify({ mcpServers: { m: { command: 'm' } } }));
+    const acc = accountDir('half');
+    fs.mkdirSync(acc, { mode: 0o700 });
+    ensureClaudeLinks(acc);
+    write(path.join(acc, '.claude.json'), 'not json');   // syncMcpServers throws at the end of the copy
+    const before = snapshot(def);
+    assert.throws(() => makeClaudeIndependent(src(), acc));
+    assert.equal(isSharedClaudeAccount(acc), true);
+    assert.ok(isLinkTo(path.join(acc, 'history.jsonl'), path.join(def, 'history.jsonl')));
+    assert.ok(isLinkTo(path.join(acc, 'projects'), path.join(def, 'projects')));
+    assert.deepEqual(JSON.parse(read(path.join(acc, 'settings.json'))), { model: 'm' });   // already copied, reported by ensureClaudeLinks
+    assert.ok(ensureClaudeLinks(acc).conflicts.includes('settings.json'));
+    assert.deepEqual(snapshot(def), before);
+  });
+
+  test('throws for the default dir and for an independent account; nothing written', () => {
+    write(path.join(def, 'CLAUDE.md'), 'rules');
+    const acc = accountDir('a');
+    write(path.join(acc, 'projects', 'p', 'x.jsonl'), 'x');
+    const before = snapshot(home);
+    assert.throws(() => makeClaudeIndependent(path.join(home, '.claude.json'), def), { message: t('unshare.default', { dir: def }) });
+    assert.throws(() => makeClaudeIndependent(path.join(home, '.claude.json'), acc), { message: t('unshare.notShared', { dir: acc }) });
+    assert.deepEqual(snapshot(home), before);
   });
 });
 

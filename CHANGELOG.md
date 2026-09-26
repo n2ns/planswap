@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Unlink** on linked account rows (Claude and Codex): after a confirmation and the busy check, the links are removed and the account gets its own copy of the default configuration (settings, rules, skills; Claude also the MCP servers). History and sessions stay in the default account; the account starts without any. The login stays.
+
+### Changed
+
+- Terminology: what the UI called a "shared account" is now a **linked account** (链接账号); independent accounts are unchanged. The add checkbox reads **Link to the default account's settings and history**, the row button **Link to the default account: …**, the badge "Linked to the default account's settings, rules, skills, history and sessions", the Tools row button **Re-link** (重新链接) and the Command Palette command **Re-link Accounts to the Default Account** (`aiSwitcher.tools.sync`, id unchanged). Confirmations, warnings and summaries use the same wording (e.g. "Re-linked N linked Claude account(s) to the default account.", "not linked for safety").
+
 ## [0.1.3] - 2026-09-27
 
 ### Added

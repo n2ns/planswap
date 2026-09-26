@@ -2,13 +2,13 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { setLocale } from '../src/i18n';
+import { setLocale, t } from '../src/i18n';
 import {
   CODEX_IDENTITY_CONFIG_KEYS, CODEX_SHARED_ENTRIES, codexAccountBusy, copyCodexIndependent, ensureCodexLinks,
-  isSharedCodexAccount, migrateCodexToShared,
+  isSharedCodexAccount, makeCodexIndependent, migrateCodexToShared,
 } from '../src/codex/codexShare';
 import { codexAccountDir, deleteCodexDir } from '../src/codex/codexPaths';
-import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
+import { assertTempHome, makeTempHome, mode, read, snapshot, type TempHome } from './helpers';
 
 let tmp: TempHome;
 let home: string;
@@ -522,6 +522,125 @@ describe('copyCodexIndependent', () => {
     assert.match(r.skipped[0].reason, /model_provider/);
     assert.ok(!exists(path.join(acc, 'config.toml')));
     assert.equal(mode(acc), '700');
+  });
+});
+
+describe('makeCodexIndependent', () => {
+  test('removes the links (dangling sqlite links too), copies the config once, leaves the default dir alone', () => {
+    write(path.join(def, 'config.toml'), 'model = "m"\n');
+    write(path.join(def, 'AGENTS.md'), 'rules');
+    write(path.join(def, 'hooks.json'), '{"h":1}');
+    write(path.join(def, 'rules', 'r.rules'), 'r');
+    write(path.join(def, 'skills', 'one', 'SKILL.md'), '1');
+    write(path.join(def, 'skills', '.system', 'x'), 's');
+    write(path.join(def, 'plugins', 'cache', 'p', 'f'), 'P');
+    write(path.join(def, 'history.jsonl'), '{"d":1}\n');
+    write(path.join(def, 'sessions', '2026', 'x.jsonl'), 'x');
+    write(path.join(def, 'auth.json'), 'def secret');
+    const acc = newAccount('a');
+    ensureCodexLinks(acc);
+    for (const name of LINK_ONLY) assert.ok(!fs.existsSync(path.join(acc, name)), `${name} dangles`);
+    write(path.join(acc, 'auth.json'), 'secret');
+    write(path.join(acc, 'memories', 'm.md'), 'mem');
+    write(path.join(acc, 'skills', 'mine', 'SKILL.md'), 'M');
+    const before = snapshot(def);
+
+    const r = makeCodexIndependent(acc);
+    assert.equal(isSharedCodexAccount(acc), false);
+    for (const { name } of CODEX_SHARED_ENTRIES) assert.ok(r.removed.includes(name), name);
+    assert.ok(r.removed.includes('skills/one'));
+    assert.ok(r.removed.includes('plugins/cache/p'));
+    assert.ok(!r.removed.includes('skills/mine'));
+    // The config folders ensureCodexLinks created empty in the default dir are copied as empty folders
+    assert.deepEqual(r.copied, ['config.toml', 'AGENTS.md', 'hooks.json', 'rules', 'hooks', 'agents', 'themes', 'skills/one']);
+    assert.deepEqual(r.skipped, []);
+    for (const e of fs.readdirSync(acc, { recursive: true }) as string[]) {
+      assert.ok(!fs.lstatSync(path.join(acc, e)).isSymbolicLink(), `${e} is still a link`);
+    }
+    for (const e of ['history.jsonl', 'session_index.jsonl', 'sessions', 'archived_sessions', ...LINK_ONLY]) {
+      assert.ok(!exists(path.join(acc, e)), e);
+    }
+    assert.equal(read(path.join(acc, 'config.toml')), 'model = "m"\n');
+    assert.equal(read(path.join(acc, 'AGENTS.md')), 'rules');
+    assert.equal(read(path.join(acc, 'hooks.json')), '{"h":1}');
+    assert.equal(read(path.join(acc, 'rules', 'r.rules')), 'r');
+    assert.equal(read(path.join(acc, 'skills', 'one', 'SKILL.md')), '1');
+    assert.equal(read(path.join(acc, 'skills', 'mine', 'SKILL.md')), 'M');
+    assert.ok(!exists(path.join(acc, 'skills', '.system')));
+    assert.deepEqual(fs.readdirSync(path.join(acc, 'plugins', 'cache')), []);
+    assert.ok(fs.lstatSync(path.join(acc, '.tmp')).isDirectory());
+    assert.equal(read(path.join(acc, 'auth.json')), 'secret');
+    assert.equal(read(path.join(acc, 'memories', 'm.md')), 'mem');
+    assert.deepEqual(snapshot(def), before);
+  });
+
+  test('an entry the account replaced by a real file or a link elsewhere is kept', () => {
+    write(path.join(def, 'AGENTS.md'), 'rules');
+    fs.mkdirSync(path.join(home, 'elsewhere'));
+    const acc = newAccount('a');
+    ensureCodexLinks(acc);
+    fs.unlinkSync(path.join(acc, 'AGENTS.md'));
+    write(path.join(acc, 'AGENTS.md'), 'own');
+    fs.unlinkSync(path.join(acc, 'rules'));
+    fs.symlinkSync(path.join(home, 'elsewhere'), path.join(acc, 'rules'));
+    const r = makeCodexIndependent(acc);
+    assert.ok(!r.removed.includes('AGENTS.md'));
+    assert.ok(!r.removed.includes('rules'));
+    assert.ok(!r.copied.includes('AGENTS.md'));
+    assert.equal(read(path.join(acc, 'AGENTS.md')), 'own');
+    assert.equal(fs.readlinkSync(path.join(acc, 'rules')), path.join(home, 'elsewhere'));
+    assert.equal(isSharedCodexAccount(acc), false);
+    assert.equal(read(path.join(def, 'AGENTS.md')), 'rules');
+  });
+
+  test('a whole-folder skills link from an earlier version is removed as one entry; a linked .tmp is not followed', () => {
+    write(path.join(def, 'skills', 'one', 'SKILL.md'), '1');
+    write(path.join(def, 'sessions', 'x.jsonl'), 'x');
+    fs.mkdirSync(path.join(def, '.tmp'));
+    const acc = newAccount('legacy');
+    ensureCodexLinks(acc);
+    fs.rmSync(path.join(acc, 'skills'), { recursive: true });
+    fs.symlinkSync(path.join(def, 'skills'), path.join(acc, 'skills'));
+    fs.rmSync(path.join(acc, '.tmp'), { recursive: true });
+    fs.symlinkSync(path.join(def, '.tmp'), path.join(acc, '.tmp'));
+    const before = snapshot(def);
+    const r = makeCodexIndependent(acc);
+    assert.ok(r.removed.includes('skills'));
+    assert.ok(!r.removed.includes('skills/one'));
+    assert.ok(!r.removed.includes('.tmp/rollout-maintenance.lock'));
+    assert.ok(fs.lstatSync(path.join(acc, '.tmp')).isSymbolicLink());
+    assert.ok(fs.lstatSync(path.join(acc, 'skills')).isDirectory());
+    assert.equal(read(path.join(acc, 'skills', 'one', 'SKILL.md')), '1');
+    assert.deepEqual(snapshot(def), before);
+  });
+
+  test('a failed copy leaves the account shared: the sessions marker and the database links are still there', () => {
+    if (process.getuid?.() === 0) return;   // root ignores directory permissions
+    write(path.join(def, 'config.toml'), 'model = "m"\n');
+    write(path.join(def, 'AGENTS.md'), 'rules');
+    write(path.join(def, 'sessions', 'x.jsonl'), 'x');
+    const acc = newAccount('half');
+    ensureCodexLinks(acc);
+    fs.chmodSync(path.join(def, 'AGENTS.md'), 0o000);   // copying AGENTS.md fails with EACCES after the config.toml seed
+    try {
+      assert.throws(() => makeCodexIndependent(acc), /EACCES/);
+    } finally {
+      fs.chmodSync(path.join(def, 'AGENTS.md'), 0o600);
+    }
+    assert.equal(isSharedCodexAccount(acc), true);
+    assert.ok(fs.lstatSync(path.join(acc, 'state_5.sqlite')).isSymbolicLink());
+    assert.ok(fs.lstatSync(path.join(acc, 'history.jsonl')).isSymbolicLink());
+    assert.equal(read(path.join(acc, 'config.toml')), 'model = "m"\n');   // already copied
+  });
+
+  test('throws for the default dir and for an independent account; nothing written', () => {
+    write(path.join(def, 'AGENTS.md'), 'rules');
+    const acc = newAccount('a');
+    write(path.join(acc, 'sessions', 'x.jsonl'), 'x');
+    const before = snapshot(home);
+    assert.throws(() => makeCodexIndependent(def), { message: t('unshare.default', { dir: def }) });
+    assert.throws(() => makeCodexIndependent(acc), { message: t('unshare.notShared', { dir: acc }) });
+    assert.deepEqual(snapshot(home), before);
   });
 });
 

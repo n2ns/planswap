@@ -18,6 +18,7 @@ import {
   copyClaudeIndependent,
   ensureClaudeLinks,
   isSharedClaudeAccount,
+  makeClaudeIndependent,
   migrateClaudeToShared,
   mirrorClaudeJson,
 } from './claudeShare';
@@ -188,6 +189,31 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     refreshUi();
   }
 
+  // Converts a shared account back to an independent one after a modal confirmation; history stays in the default dir
+  async function unshareAccount(account: Account): Promise<void> {
+    if (account.name === DEFAULT_NAME || !isSharedClaudeAccount(account.dir)) return;
+    if (isCurrent(account)) {
+      void vscode.window.showWarningMessage(t('unshare.current', { label: labelOf(account) }));
+      return;
+    }
+    const ok = t('unshare.confirmButton');
+    const picked = await vscode.window.showWarningMessage(t('unshare.confirm', { label: labelOf(account), dir: account.dir }), { modal: true }, ok);
+    if (picked !== ok) return;
+    if (claudeAccountBusy(account.dir)) {
+      void vscode.window.showWarningMessage(t('share.busy', { name: labelOf(account) }));
+      return;
+    }
+    try {
+      const r = makeClaudeIndependent(defaultJson(), account.dir);
+      void vscode.window.showInformationMessage(
+        t('unshare.done', { label: labelOf(account), removed: r.removed.length, copied: r.copied.join(', ') || t('unshare.nothingCopied') }),
+      );
+    } catch (err) {
+      void vscode.window.showErrorMessage(t('unshare.failed', { label: labelOf(account), error: errText(err) }));
+    }
+    refreshUi();
+  }
+
   // confirmed: the panel already did an inline confirmation; Command Palette entries need a modal confirmation
   async function removeAccount(account: Account, confirmed: boolean): Promise<void> {
     if (account.name === DEFAULT_NAME || !store.find(account.name)) return;
@@ -261,6 +287,11 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
       case 'share': {
         const a = panel.resolve(MODE, msg.dir);
         if (a?.kind === 'named') await shareAccount(a);
+        return;
+      }
+      case 'unshare': {
+        const a = panel.resolve(MODE, msg.dir);
+        if (a?.kind === 'named') await unshareAccount(a);
         return;
       }
       case 'rename':

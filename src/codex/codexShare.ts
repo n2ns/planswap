@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import { samePath, sameRealPath } from '../paths';
 import {
   type MergeCtx, type MigrateReport, type ShareReport, copyTree, defaultFolder, emptyReport, freeName, linkEntry,
-  linksTo, lstatOrUndefined, mergeEntry, mergeLines, moveEntry, realOrResolved, record, sameContent,
+  linksTo, lstatOrUndefined, mergeEntry, mergeLines, moveEntry, realOrResolved, record, sameContent, unlinkChildLinks, unlinkIfLinksTo,
 } from '../claudeShare';
 import { blockedConfigReason, codexDaemonAlive, codexDefaultDir, copyCodexSeed } from './codexPaths';
 
@@ -338,4 +338,38 @@ export function copyCodexIndependent(dir: string): { copied: string[]; skipped: 
     }
   }
   return { copied, skipped };
+}
+
+/** Converts a shared account back into an independent one: removes every link into the default directory (the
+ *  CODEX_SHARED_ENTRIES entries, including dangling link-only links, and the skills/ plugins/cache children whose
+ *  link resolves into the default directory; anything else, including auth.json and memories/, is left untouched),
+ *  then copies the default configuration as copyCodexIndependent does. Sessions and history stay in the default
+ *  directory. Throws for the default directory and for an account that is not shared. */
+// Entries that get an own copy when the account becomes independent; unlinked before the copy, the rest after it
+const INDEPENDENT_CONFIG_ENTRIES = new Set(['config.toml', ...INDEPENDENT_COPY_FILES, ...INDEPENDENT_COPY_DIRS]);
+
+export function makeCodexIndependent(dir: string): { removed: string[]; copied: string[]; skipped: Array<{ file: string; reason: string }> } {
+  if (isDefault(dir)) throw new Error(t('unshare.default', { dir }));
+  if (!isSharedCodexAccount(dir)) throw new Error(t('unshare.notShared', { dir }));
+  const def = codexDefaultDir();
+  const acc = path.resolve(dir);
+  const removed: string[] = [];
+  const unlinkEntries = (config: boolean): void => {
+    for (const { name } of CODEX_SHARED_ENTRIES) {
+      if (INDEPENDENT_CONFIG_ENTRIES.has(name) !== config) continue;
+      const parent = path.dirname(name);
+      // Nested entries only inside a real account folder (a linked '.tmp' is never followed)
+      if (parent !== '.' && !isRealFolder(acc, parent)) continue;
+      unlinkIfLinksTo(path.join(acc, name), path.join(def, name), name, removed);
+    }
+  };
+  const unlinkChildren = (rel: string): void => unlinkChildLinks(path.join(acc, rel), path.join(def, rel), rel, isRealFolder(acc, rel), removed);
+  // The configuration is unlinked and copied first; sessions, history, the databases and the sessions marker only
+  // afterwards, so a failed copy leaves the account shared (missing links are re-created by ensureCodexLinks)
+  unlinkEntries(true);
+  unlinkChildren('skills');
+  const copy = copyCodexIndependent(dir);
+  unlinkEntries(false);
+  unlinkChildren('plugins/cache');
+  return { removed, ...copy };
 }

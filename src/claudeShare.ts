@@ -538,6 +538,55 @@ export function copyClaudeIndependent(fromJson: string, dir: string): { copied: 
   return { copied };
 }
 
+/** Converts a shared account back into an independent one: removes every link into the default directory
+ *  (the CLAUDE_SHARED_ENTRIES entries and the skills/ plugins/ children whose link resolves into the default
+ *  directory; anything else is left untouched), then copies the default configuration as copyClaudeIndependent
+ *  does. History and sessions stay in the default directory. Throws for the default directory and for an
+ *  account that is not shared. Returns the removed link names (children as 'skills/<child>') and the copied entries. */
+/** Unlinks `link` when it is a symlink resolving to the default entry `target` (linksTo: real paths compared);
+ *  records `name` in `removed`. Regular files and links resolving elsewhere are left alone. */
+export function unlinkIfLinksTo(link: string, target: string, name: string, removed: string[]): boolean {
+  if (!linksTo(link, target)) return false;
+  fs.unlinkSync(link);
+  removed.push(name);
+  return true;
+}
+
+/** Per-child folder (skills/ …): a whole-folder link from an earlier version is removed as one entry `rel`; a real
+ *  folder (realFolder) keeps its non-link children and loses the children linked to the default folder. */
+export function unlinkChildLinks(accFolder: string, defFolder: string, rel: string, realFolder: boolean, removed: string[]): void {
+  if (unlinkIfLinksTo(accFolder, defFolder, rel, removed) || !realFolder) return;
+  for (const child of fs.readdirSync(accFolder)) {
+    unlinkIfLinksTo(path.join(accFolder, child), path.join(defFolder, child), `${rel}/${child}`, removed);
+  }
+}
+
+// Entries that get an own copy when the account becomes independent; unlinked before the copy, the rest after it
+const INDEPENDENT_CONFIG_ENTRIES = new Set(['settings.json', 'CLAUDE.md', ...INDEPENDENT_COPY_DIRS]);
+
+export function makeClaudeIndependent(fromJson: string, dir: string): { removed: string[]; copied: string[] } {
+  if (isDefault(dir)) throw new Error(t('unshare.default', { dir }));
+  if (!isSharedClaudeAccount(dir)) throw new Error(t('unshare.notShared', { dir }));
+  const def = defaultDir();
+  const acc = path.resolve(dir);
+  const removed: string[] = [];
+  const unlinkEntries = (config: boolean): void => {
+    for (const { name } of CLAUDE_SHARED_ENTRIES) {
+      if (INDEPENDENT_CONFIG_ENTRIES.has(name) === config) unlinkIfLinksTo(path.join(acc, name), path.join(def, name), name, removed);
+    }
+  };
+  const unlinkChildren = (name: string): void =>
+    unlinkChildLinks(path.join(acc, name), path.join(def, name), name, !!lstatOrUndefined(path.join(acc, name))?.isDirectory(), removed);
+  // The configuration is unlinked and copied first; history, sessions and the projects marker only afterwards, so a
+  // failed copy leaves the account shared (missing links are re-created by ensureClaudeLinks)
+  unlinkEntries(true);
+  unlinkChildren('skills');
+  const { copied } = copyClaudeIndependent(fromJson, dir);
+  unlinkEntries(false);
+  unlinkChildren('plugins');
+  return { removed, copied };
+}
+
 /** Shared iff <dir>/projects is a symlink resolving to the default dir's projects. The default dir → false. */
 export function isSharedClaudeAccount(dir: string): boolean {
   if (isDefault(dir)) return false;

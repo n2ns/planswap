@@ -450,9 +450,15 @@ class Page {
     const actions = h('div', { class: 'row-actions' });
     if (!editing) {
       if (a.kind === 'named') actions.append(toolbarButton('edit', t('row.rename'), () => this.startRename(a)));
-      // Independent account: offer converting it to a shared one (the host confirms; not while it is current)
-      if (a.kind === 'named' && a.shared === false && !a.isCurrent) {
+      // Conversions are refused by the host for the current account and for the Codex account selected but not yet effective
+      const convertible = a.kind === 'named' && !a.isCurrent && !(this.mode === 'codex' && this.tab.pendingDir === a.dir);
+      // Independent account: offer converting it to a shared one (the host confirms)
+      if (convertible && a.shared === false) {
         actions.append(toolbarButton('link', t('row.share'), () => this.send({ type: 'share', dir: a.dir })));
+      }
+      // Shared account: offer converting it back to an independent one (the host confirms)
+      if (convertible && a.shared === true) {
+        actions.append(toolbarButton('debug-disconnect', t('row.unshare'), () => this.send({ type: 'unshare', dir: a.dir })));
       }
       // The second click of a double-click (detail > 1) would send a duplicate switch
       if (!a.isCurrent) {

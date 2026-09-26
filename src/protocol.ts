@@ -60,6 +60,8 @@ export type FromWebview =
   | { type: 'add'; mode: PanelMode; name: string; shared: boolean }
   // Convert an independent named account into one shared with the default account
   | { type: 'share'; mode: PanelMode; dir: string }
+  // Convert a shared named account back into an independent one (links removed, default configuration copied)
+  | { type: 'unshare'; mode: PanelMode; dir: string }
   | { type: 'rename'; mode: PanelMode; dir: string; label: string }
   | { type: 'reload'; mode: PanelMode }
   | { type: 'dismissBanner'; mode: PanelMode }

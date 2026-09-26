@@ -22,7 +22,7 @@
   "command.tools.reloadWindow": "重新加载窗口",
   "command.tools.restartExtHost": "重启扩展宿主",
   "command.tools.cliVersions": "显示 CLI 与插件版本",
-  "command.tools.sync": "同步共享账号与默认账号",
+  "command.tools.sync": "重新链接账号到默认账号",
   "viewContainer.title": "AI 账号切换器",
   "view.name": "AI 账号切换器",
   "config.title": "AI 账号切换器",

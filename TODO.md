@@ -25,7 +25,7 @@ is still missing. Remove an item once it is done or decided.
 - **Onboarding state is not mirrored.** A new shared Claude account gets `mcpServers` and the per-project keys, but not
   `hasCompletedOnboarding` / `lastOnboardingVersion` (or `githubRepoPaths`) from the default `.claude.json`, so the CLI may
   run its first-start onboarding again. Decide whether `mirrorClaudeJson` should copy these keys.
-- **Mirroring only runs on add, before a switch, after a conversion and on "Sync shared".** MCP servers or project settings
+- **Mirroring only runs on add, before a switch, after a conversion and on "Re-link".** MCP servers or project settings
   changed in the default account while a shared account is current are not propagated until the next switch or sync.
   Consider watching the default `.claude.json` and mirroring automatically.
 - **Claude prompt history "storage v5".** Claude Code 2.1.274 has a feature-flagged history backend that opens

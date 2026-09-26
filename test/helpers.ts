@@ -48,6 +48,25 @@ export function assertTempHome(expected?: string): void {
 export const read = (f: string): string => fs.readFileSync(f, 'utf8');
 export const mode = (f: string): string => (fs.statSync(f).mode & 0o777).toString(8);
 
+/** Sorted list of every entry below dir as 'relative path|kind|content' (links by target, never followed) */
+export function snapshot(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, rel: string): void => {
+    for (const child of fs.readdirSync(d).sort()) {
+      const p = path.join(d, child);
+      const r = path.join(rel, child);
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) out.push(`${r}|link|${fs.readlinkSync(p)}`);
+      else if (st.isDirectory()) {
+        out.push(`${r}|dir|`);
+        walk(p, r);
+      } else out.push(`${r}|file|${fs.readFileSync(p, 'utf8')}`);
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
 /** In-memory Memento stub */
 export class MemoryMemento implements Memento {
   readonly data = new Map<string, unknown>();
