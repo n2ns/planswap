@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-27
+
 ### Added
 
 - **Update CLI** in both tabs' Tools rows: runs `claude update` or `env -u CODEX_HOME codex update` in a visible terminal. The Codex command supports updating a default-home standalone installation after switching accounts.
