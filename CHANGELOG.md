@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-27
+
 ### Added
 
 - **Unlink** on linked account rows (Claude and Codex): after a confirmation and the busy check, the links are removed and the account gets its own copy of the default configuration (settings, rules, skills; Claude also the MCP servers). History and sessions stay in the default account; the account starts without any. The login stays.
+
+### Fixed
+
+- Upgrading from 0.1.0 - 0.1.3 (named ai-switcher) kept Codex switching working in the shell but showed it as disabled, and enabling again was refused because of the old block. The old `ai-switcher` marker blocks in `~/.bashrc` / `~/.profile` are now replaced in place on activation and the selected account moves from `~/.config/ai-switcher/codex-home` to `~/.config/planswap/codex-home`; no server restart is needed.
+- A language chosen under the old setting `aiSwitcher.language` is carried over to `planswap.language` once.
 
 ### Changed
 

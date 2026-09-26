@@ -12,10 +12,12 @@ import { CodexAccountStore } from './codex/codexStore';
 import { codexPanelSource, registerCodexCommands, restartServerInteractive } from './codex/codexCommands';
 import { registerToolCommands, runTool, type ToolDeps } from './tools';
 import { setLocale, t } from './i18n';
-import { resolveLocale, watchLocale } from './i18nVscode';
+import { migrateLegacyLanguage, resolveLocale, watchLocale } from './i18nVscode';
+import { migrateLegacyCodex } from './codex/codexState';
 
 export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
-  // Resolve the UI locale before anything renders
+  // Resolve the UI locale before anything renders (a language set under the pre-rename key is carried over once)
+  await migrateLegacyLanguage(ctx.globalState);
   setLocale(resolveLocale());
   if (process.platform !== 'linux') {
     void vscode.window.showWarningMessage(t('ext.linuxOnly'));
@@ -35,6 +37,13 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   let codex: { store: CodexAccountStore; labels: LabelStore } | undefined;
   let codexSource: PanelSource = { accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] };
   let codexInitError: string | undefined;
+  // Setups written before the rename (ai-switcher) are migrated in place; on failure the Codex page shows the usual
+  // pre-check reasons, and this warning says why
+  try {
+    migrateLegacyCodex();
+  } catch (err) {
+    void vscode.window.showWarningMessage(t('ext.codexLegacyFailed', { error: err instanceof Error ? err.message : String(err) }));
+  }
   try {
     const codexStore = new CodexAccountStore(state);
     await codexStore.syncWithDisk(codexLabels);

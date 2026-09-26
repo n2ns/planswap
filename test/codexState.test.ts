@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
 import {
   RC_BEGIN, RC_END, STATE_FILE, effectiveDir, installRcBlocks, preCheck, rcBlock, rcStatus, readSelectedDir,
-  removeRcBlockFrom, removeRcBlocks, selfCheck, writeSelectedDir,
+  migrateLegacyCodex, removeRcBlockFrom, removeRcBlocks, selfCheck, writeSelectedDir,
 } from '../src/codex/codexState';
 import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
 
@@ -272,6 +272,118 @@ describe('installRcBlocks / removeRcBlocks / rcStatus', () => {
     } finally {
       fs.chmodSync(bashrc, 0o644);
     }
+  });
+});
+
+describe('migrateLegacyCodex (pre-rename ai-switcher setup)', () => {
+  const toLegacy = (text: string): string => text.replace(/_planswap_/g, '_ai_switcher_').replace(/planswap/g, 'ai-switcher');
+  const legacyState = (): string => path.join(home, '.config', 'ai-switcher', 'codex-home');
+  let installedBashrc: string;
+  let installedProfile: string;
+
+  /** Writes the rc files as 0.1.x installed them (the current install with the old names) and the legacy state file */
+  const setup = (legacySelected: string | undefined): void => {
+    fs.rmSync(STATE_FILE(), { force: true });
+    fs.rmSync(path.dirname(legacyState()), { recursive: true, force: true });
+    fs.writeFileSync(bashrc, bashrcOrig, { mode: 0o600 });
+    fs.chmodSync(bashrc, 0o600);
+    fs.writeFileSync(profile, profileOrig, { mode: 0o644 });
+    fs.chmodSync(profile, 0o644);
+    installRcBlocks();
+    installedBashrc = read(bashrc);
+    installedProfile = read(profile);
+    fs.writeFileSync(bashrc, toLegacy(installedBashrc));
+    fs.writeFileSync(profile, toLegacy(installedProfile));
+    if (legacySelected !== undefined) {
+      fs.mkdirSync(path.dirname(legacyState()), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(legacyState(), legacySelected, { mode: 0o600 });
+    }
+  };
+  after(() => {
+    fs.rmSync(STATE_FILE(), { force: true });
+    fs.rmSync(path.dirname(legacyState()), { recursive: true, force: true });
+    fs.writeFileSync(bashrc, bashrcOrig);
+    fs.writeFileSync(profile, profileOrig);
+  });
+
+  test('replaces the legacy blocks in place, keeps the selected account and modes, deletes the legacy state file', () => {
+    const dir = path.join(home, '.codex-work');
+    setup(dir);
+    assert.deepEqual(rcStatus().map((s) => [s.hasBlock, s.hasUserExport]), [[false, true], [false, true]]);
+    assert.equal(preCheck().ok, false);
+    assert.equal(migrateLegacyCodex(), true);
+    assert.equal(read(bashrc), installedBashrc);
+    assert.equal(read(profile), installedProfile);
+    assert.equal(mode(bashrc), '600');
+    assert.equal(mode(profile), '644');
+    assert.equal(readSelectedDir(), dir);
+    assert.equal(mode(STATE_FILE()), '600');
+    assert.equal(fs.existsSync(path.dirname(legacyState())), false);
+    assert.deepEqual(rcStatus().map((s) => [s.hasBlock, s.hasUserExport]), [[true, false], [true, false]]);
+    assert.equal(preCheck().ok, true);
+    // Idempotent: nothing left to migrate
+    assert.equal(migrateLegacyCodex(), false);
+    assert.equal(read(bashrc), installedBashrc);
+  });
+  test('an empty legacy state file (default account) becomes an empty state file', () => {
+    setup('');
+    assert.equal(migrateLegacyCodex(), true);
+    assert.equal(read(STATE_FILE()), '');
+    assert.equal(readSelectedDir(), undefined);
+  });
+  test('a missing legacy state file leaves the state file missing; the rc blocks are still migrated', () => {
+    setup(undefined);
+    assert.equal(migrateLegacyCodex(), true);
+    assert.equal(fs.existsSync(STATE_FILE()), false);
+    assert.equal(read(bashrc), installedBashrc);
+  });
+  test('an existing current state file is not overwritten', () => {
+    setup(path.join(home, '.codex-old'));
+    writeSelectedDir(path.join(home, '.codex-new'));
+    assert.equal(migrateLegacyCodex(), true);
+    assert.equal(readSelectedDir(), path.join(home, '.codex-new'));
+    assert.equal(fs.existsSync(legacyState()), false);
+  });
+  test('a legacy block without its end marker throws and changes nothing', () => {
+    setup(path.join(home, '.codex-work'));
+    const broken = read(bashrc).replace('# <<< ai-switcher codex <<<\n', '');
+    fs.writeFileSync(bashrc, broken);
+    const legacyProfile = read(profile);
+    assert.throws(() => migrateLegacyCodex(), /\.bashrc/);
+    assert.equal(read(bashrc), broken);
+    assert.equal(read(profile), legacyProfile);
+    assert.equal(fs.existsSync(STATE_FILE()), false);
+    assert.equal(fs.existsSync(legacyState()), true);
+  });
+  test('without a legacy block nothing changes, even when a legacy state file exists', () => {
+    setup(path.join(home, '.codex-work'));
+    fs.writeFileSync(bashrc, installedBashrc);
+    fs.writeFileSync(profile, installedProfile);
+    assert.equal(migrateLegacyCodex(), false);
+    assert.equal(fs.existsSync(legacyState()), true);
+    assert.equal(fs.existsSync(STATE_FILE()), false);
+  });
+  test('a legacy block added by an old version next to a current block is dropped with its blank line; removal still restores exactly', () => {
+    setup('');
+    // What 0.1.x does in a file that already has the current block: before the guard after a blank line (.bashrc),
+    // appended after a blank line (.profile)
+    const guard = installedBashrc.indexOf('case $- in');
+    fs.writeFileSync(bashrc, installedBashrc.slice(0, guard) + '\n' + toLegacy(rcBlock()) + installedBashrc.slice(guard));
+    fs.writeFileSync(profile, installedProfile + '\n' + toLegacy(rcBlock()));
+    assert.equal(migrateLegacyCodex(), true);
+    assert.equal(read(bashrc), installedBashrc);
+    assert.equal(read(profile), installedProfile);
+    removeRcBlocks();
+    assert.equal(read(bashrc), bashrcOrig);
+    assert.equal(read(profile), profileOrig);
+  });
+  test('missing rc files are skipped', () => {
+    setup('');
+    fs.rmSync(profile);
+    assert.equal(migrateLegacyCodex(), true);
+    assert.equal(fs.existsSync(profile), false);
+    assert.equal(read(bashrc), installedBashrc);
+    fs.writeFileSync(profile, profileOrig);
   });
 });
 

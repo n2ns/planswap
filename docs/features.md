@@ -519,6 +519,7 @@ fi
 - Appending at the end adds a blank line before the block when the file ends with a newline, and only the missing newline otherwise.
 - Removal deletes everything from the start marker to the end marker (including the marker lines) and the blank line (or newline) added on installation, so install + remove restores the original bytes of a file that existed before (a file created by enabling is left empty); when the end marker is missing in either file an error is thrown and neither file is changed.
 - "Enabled" for the Codex page = both files have the marker block.
+- Upgrading from 0.1.0 - 0.1.3 (named ai-switcher): on activation the old blocks (`# >>> ai-switcher codex >>>`) are replaced in place by the block above and the selected account in `~/.config/ai-switcher/codex-home` moves to the new state file, so Codex switching stays enabled with the same account and no server restart is needed. If an old block lacks its end marker, a warning is shown, nothing is changed and the Codex page shows the pre-check reason; fix the block by hand. An older version still installed in another editor on the same distro shows Codex switching as disabled until it is upgraded.
 
 ### 10.12 Shared and independent Codex accounts
 
@@ -545,6 +546,7 @@ Same model as on the Claude side (section 5), with the default directory `~/.cod
 ## 11. Language
 
 - Setting `planswap.language` (scope `application`): `auto` (default) follows the VS Code display language (`zh-cn` when it starts with `zh`, otherwise `en`); `en` English; `zh-cn` 简体中文.
+- Upgrading from 0.1.0 - 0.1.3 (named ai-switcher): a user-level `aiSwitcher.language` of `en` / `zh-cn` is copied once to `planswap.language` on activation when the new setting has no user-level value. The old key stays in settings.json (it can no longer be written by the extension); remove it by hand if you like.
 - Changing the setting takes effect immediately, without a reload, for everything rendered at runtime:
   - the sidebar panel re-renders completely in the new language: tabs, section titles, banners, buttons, tooltips, aria-labels, placeholders, the add-section help text, validation messages, the disabled Codex page, the "Tools" row, the footer toolbar titles and the version card;
   - the status bar text and tooltip ("Not logged in", "External directory");

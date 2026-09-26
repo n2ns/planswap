@@ -24,6 +24,7 @@ export const en = {
   // extension.ts
   'ext.linuxOnly': 'PlanSwap only supports WSL/Linux.',
   'ext.codexUnavailable': 'Codex account switching is unavailable: {error}',
+  'ext.codexLegacyFailed': 'Cannot migrate the Codex switching setup of an earlier version (ai-switcher): {error}',
 
   // Account name validation (add account)
   'name.empty': 'Enter an account name',
@@ -211,6 +212,7 @@ export const zhCn: Record<MessageKey, string> = {
 
   'ext.linuxOnly': 'PlanSwap仅支持 WSL/Linux。',
   'ext.codexUnavailable': 'Codex 账号切换不可用：{error}',
+  'ext.codexLegacyFailed': '无法迁移旧版本（ai-switcher）的 Codex 切换配置：{error}',
 
   'name.empty': '请输入账号名',
   'name.invalid': '只能包含字母、数字、下划线和连字符',

@@ -270,6 +270,78 @@ export function removeRcBlocks(): void {
   for (const { file, content } of writes) writeRc(file, content, statMode(file));
 }
 
+// Before the rename to PlanSwap (0.1.0 - 0.1.3) the state file and the rc marker block used the name "ai-switcher".
+// These strings must stay byte-identical to what those versions wrote
+const LEGACY_STATE_FILE = () => path.join(os.homedir(), '.config', 'ai-switcher', 'codex-home');
+const LEGACY_BEGIN = '# >>> ai-switcher codex >>>';
+const LEGACY_END = '# <<< ai-switcher codex <<<';
+
+/**
+ * Returns the content with every legacy block replaced by the current block (the first one; later ones and legacy
+ * blocks in a file that already has a current block are dropped together with the blank line added before them), or undefined when the file is missing or has no
+ * legacy block. Lines outside the blocks, including the blank line before them, are kept. Throws when a legacy
+ * BEGIN lacks its END. Does not write.
+ */
+function withLegacyReplaced(file: string): string | undefined {
+  const text = readText(file);
+  if (text === undefined) return undefined;
+  const lines = text.split('\n');
+  let hasCurrent = lines.some((l) => l.trim() === RC_BEGIN);
+  let changed = false;
+  for (;;) {
+    const begin = lines.findIndex((l) => l.trim() === LEGACY_BEGIN);
+    if (begin < 0) break;
+    const end = lines.findIndex((l, i) => i > begin && l.trim() === LEGACY_END);
+    if (end < 0) throw new Error(t('codex.rc.missingEnd', { file }));
+    if (hasCurrent) {
+      // Dropped: also remove the blank line (or the newline) the old version added before it, as withoutBlocks does
+      lines.splice(begin, end - begin + 1);
+      if (begin > 0 && (lines[begin - 1] === '' || lines[begin - 1] === '\r')) lines.splice(begin - 1, 1);
+      else if (begin > 0 && begin === lines.length - 1 && lines[begin] === '') lines.pop();
+    } else {
+      // Replaced in place: rcBlock() ends with a newline; its last empty element is dropped because the END line keeps its own line break
+      lines.splice(begin, end - begin + 1, ...rcBlock().split('\n').slice(0, -1));
+    }
+    hasCurrent = true;
+    changed = true;
+  }
+  return changed ? lines.join('\n') : undefined;
+}
+
+/**
+ * Migrates the Codex setup written before the rename, so an upgraded installation stays enabled with the same
+ * selected account: when either rc file has a legacy block, the legacy state file's content is copied to
+ * STATE_FILE (only when that does not exist yet), the legacy blocks are replaced in place by the current block
+ * (atomic, symlinks followed, mode kept), and the legacy state file is deleted (its folder too when empty).
+ * Both rc files are checked before anything is written; a legacy block without its END marker throws and nothing
+ * changes. The selected directory stays the same, so the server environment does not need to be resolved again.
+ * Returns true when something was migrated.
+ */
+export function migrateLegacyCodex(): boolean {
+  const errors: Error[] = [];
+  const writes: Array<{ file: string; content: string }> = [];
+  for (const file of [bashrcPath(), profilePath()]) {
+    try {
+      const content = withLegacyReplaced(file);
+      if (content !== undefined) writes.push({ file, content });
+    } catch (e) {
+      errors.push(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new Error(errors.map((e) => e.message).join(t('common.listSep')));
+  if (writes.length === 0) return false;
+  const legacy = readText(LEGACY_STATE_FILE());
+  if (legacy !== undefined && readText(STATE_FILE()) === undefined) {
+    const dir = legacy.trim();
+    writeSelectedDir(dir ? dir : undefined);
+  }
+  for (const { file, content } of writes) writeRc(file, content, statMode(file));
+  try { fs.unlinkSync(LEGACY_STATE_FILE()); } catch { /* missing or already removed by another window */ }
+  try { fs.rmdirSync(path.dirname(LEGACY_STATE_FILE())); } catch { /* not empty or missing */ }
+  return true;
+}
+
 const STDERR_NOISE = ['cannot set terminal process group', 'no job control in this shell'];
 
 export function selfCheck(): { ok: boolean; detail: string } {
