@@ -91,6 +91,8 @@ Sign-in and AI requests are handled by the official Claude Code and Codex client
 - [Feature reference](docs/features.md): every button, command and rule in detail.
 - [Claude design](docs/design.md) and [Codex design](docs/codex-design.md): how switching works and why.
 - [AGENTS.md](AGENTS.md): development, tests (`npm test`) and contribution rules.
+- [Blog post](https://n2ns.com/blog/switch-claude-code-codex-accounts-planswap): why PlanSwap exists and how it switches accounts without touching credentials.
+- [Project page](https://n2ns.com/projects/planswap) on N2NS Lab.
 
 ## Disclaimer
 
