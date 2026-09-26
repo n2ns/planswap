@@ -3,6 +3,8 @@
 Date: 2026-09-26
 Status: implemented (v8, 2026-09-26: shared and independent accounts (8.6): a shared account links everything except its login identity and memories to `~/.codex`, an independent one gets a one-time copy of its configuration; `AGENTS.md` is no longer linked on its own; the `default` account can no longer be renamed (only named accounts, 8.5); v7, 2026-09-26: the WSL server restart works per editor kind detected from a whitelist of server data directories: Antigravity and VSCodium restart automatically, VS Code and unrecognized editors only get manual instructions (section 5); v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `planswap.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
 
+Purpose: Codex account-switching design, shell/environment propagation, editor restart rationale, upstream evidence and limitations. Exact module contracts are in [Codex interfaces](codex-interfaces.md), observable behavior in [Features](features.md), and acceptance procedures in [Manual Verification](manual-verification.md). See [Documentation](README.md) for ownership.
+
 ## 1. Goals and scope
 
 - Goal: add OpenAI Codex account switching to the same sidebar extension. After a switch, the official Codex editor extension, the codex processes it starts, and the codex CLI in integrated terminals all use the selected account, without signing in again.
@@ -18,7 +20,7 @@ Status: implemented (v8, 2026-09-26: shared and independent accounts (8.6): a sh
 
 ## 2. Background facts (verified)
 
-Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.chatgpt-26.908.40401` extension source code, `microsoft/vscode` 1.107.0 source code, the local Antigravity server (`server-main.js`) and startup scripts, the Windows-side `antigravity-remote-wsl` extension, local logs and the process tree.
+Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.chatgpt-26.908.40401` extension source code, `microsoft/vscode` 1.107.0 source code, the local Antigravity server (`server-main.js`) and startup scripts, the Windows-side `antigravity-remote-wsl` extension, local logs and the process tree. **Re-verify these assumptions after upgrading Codex, the Codex extension, Antigravity, VSCodium or VS Code.**
 
 1. All local Codex state lives in `CODEX_HOME` (default `~/.codex`). When the variable is set, the directory must already exist, and the path is resolved through symlinks. The credentials in `auth.json` are isolated per directory; in keyring mode the keys are also distinguished by a hash of the directory path.
 2. The app-server reads `CODEX_HOME` once at startup and then caches the credentials in memory; it does not watch the file, and there is no interface to reload authentication or change the directory. Changing accounts requires restarting the process.
@@ -41,6 +43,8 @@ The following facts about shared accounts come from codex-cli 0.157.1 (source an
 16. `history.jsonl` is appended to in place; deleting a thread rewrites `session_index.jsonl` by rename, which replaces the link of that account by a regular file (repaired by merging the lines back, 8.6). `.tmp/rollout-compression.lock` is created with `O_EXCL`, which fails on a dangling link, so it is not shared; `.tmp/rollout-maintenance.lock` is an flock file and is shared so two accounts do not maintain the shared rollouts at once.
 17. Codex refuses a symlinked memories root, so `memories/` and the memories databases stay per account.
 18. Resuming a thread across accounts is not blocked locally, but reasoning and compaction items carry `encrypted_content` bound to the organization that produced it; the server may reject resuming another organization's session ("encrypted content organization_id did not match").
+
+The daemon liveness check also relies on the JSON format Codex writes to `<dir>/app-server-daemon/*.pid` (`pid`, `processIdentity.startTicks` / `processStartTime`); re-verify it after Codex upgrades.
 
 ## 3. Overall design
 
@@ -227,38 +231,15 @@ Same model as on the Claude side (design.md 6.7), implemented in `src/codex/code
 
 ## 10. Code structure
 
-```
-src/codex/
-  codexPaths.ts      default dir, account dirs, scan, read-only auth.json (email, plan),
-                     seed config.toml copy (blockedConfigReason), delete checks (incl. daemon)
-  codexShare.ts      shared vs independent accounts: shared entries, isSharedCodexAccount,
-                     ensureCodexLinks, codexAccountBusy, migrateCodexToShared,
-                     copyCodexIndependent
-  codexState.ts      atomic state file I/O, rc marker block detect/write/remove,
-                     pre-check, self-check
-  codexServer.ts     detect the editor kind, locate, verify and restart the WSL-side server
-  codexStore.ts      codex.accounts / codex.ignoredDirs
-  codexCommands.ts   codexPanelSource; enable / disable / switch / add / remove / terminal /
-                     restart / rename / share; handles Codex page messages
-labels.ts            LabelStore (codex.labels) and labelFor,
-                     shared with Claude
-accountsPanel.ts     single instance, receives the { claude, codex } PanelSources; dispatches
-                     messages by mode
-i18n.ts              host i18n tables and t(), shared with Claude (used by the codex modules)
-webview/main.ts      top tab bar; the Codex page renders state.codex with its own texts,
-                     buttons and the disabled page
-webview/i18n.ts      Webview i18n tables and t()
-```
+Codex module responsibilities and signatures are maintained in [Codex interfaces](codex-interfaces.md); shared protocol, labels, panel and localization contracts are in [Interfaces](interfaces.md). The repository map is in [Development](development.md#repository-layout).
 
-Logic shared with Claude (path safety checks, shQuote, avatars, the link / merge helpers of claudeShare.ts, describeShareReport, etc.) is extracted into shared functions without changing Claude's behavior.
+Logic shared with Claude (path safety checks, `shQuote`, avatars, link/merge helpers and `describeShareReport`) is extracted into shared functions without changing Claude's behavior.
 
 ## 11. Implementation order and verification
 
-1. Implement and test sections 4 and 5 first:
-   - the self-check passes after enabling;
-   - switch using a temporary empty directory, terminate the server and confirm: the pty host and integrated terminals have exited, no server is left behind, Antigravity shows "Cannot reconnect", and after reloading the new extension host's `process.env.CODEX_HOME` equals the state file content and the environ of new codex processes contains that value;
-   - after switching back to default, `CODEX_HOME` is empty in new terminals.
-2. Then implement the UI and the commands.
+For changes to shell configuration or server restart behavior, validate the data-layer paths before the dependent UI flows. Automated tests use temporary HOME directories and fake process trees; they must never signal an editor server.
+
+The self-check, server/terminal shutdown observations, reconnect environment checks and return-to-default checks are maintained in [Manual Verification](manual-verification.md#codex). Real-server restart checks are performed by the user. Outstanding acceptance work remains in [TODO](../TODO.md).
 
 ## 12. Known limitations
 

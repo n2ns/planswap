@@ -1,4 +1,6 @@
-# Module Interface Contract (shared during development; implementations must follow the signatures exactly)
+# Claude and Shared Module Interfaces
+
+Purpose: module responsibilities, signatures, data types, message contracts and implementation invariants for Claude and the shared host/frontend. Implementations must follow these contracts. Codex-specific contracts live in [Codex interfaces](codex-interfaces.md); design rationale is in [Claude design](design.md). Build/setup belongs in [Development](development.md), acceptance steps in [Manual Verification](manual-verification.md). See [Documentation](README.md) for ownership.
 
 All files live in `src/`, TypeScript strict, ESM-style imports.
 
@@ -39,6 +41,8 @@ export function migrateLegacyLanguage(state: vscode.Memento): Promise<void>; // 
 - `contributes.configuration`: `planswap.language`, type string, enum `["auto", "en", "zh-cn"]`, default `"auto"`, scope `application`, enumDescriptions: auto = follow the VS Code display language; en = English; zh-cn = 简体中文.
 
 ## src/paths.ts (data layer, no vscode import)
+
+Paths are absolute after `path.resolve`, without `~` or a trailing slash. Use `samePath` for path equality and `sameRealPath` when protecting the default directory from aliasing through symlinks. Obtain the Claude default through `defaultDir()` rather than hard-coding `~/.claude`. Every account-info reader and watcher uses `claudeJsonPath(dir, isExplicitConfigDir(dir))`; parsing a missing or half-written `.claude.json` must not throw.
 
 ```ts
 export const DEFAULT_NAME = 'default';
@@ -257,7 +261,7 @@ export class AccountsPanel implements vscode.WebviewViewProvider, vscode.Disposa
   dispose(): void;
 }
 ```
-- `resolveWebviewView`: `enableScripts: true`, `localResourceRoots: [<extension>/dist/media]`; the HTML references `codicon.css` (the `<link>` id must be `vscode-codicon-stylesheet`), `panel-style.css` and `panel.js` (with nonce); on `ready` it pushes the state and handles a queued focusAdd; `setTab` only writes the memento, without pushing; it pushes the state when the panel becomes visible; when the panel is disposed it clears the reference and the ready flag.
+- `resolveWebviewView`: set `webview.html` (including CSP) before `webview.options`; the reverse order loads an empty page and logs "created a webview without a content security policy". `enableScripts: true`, `localResourceRoots: [<extension>/dist/media]`; the HTML references `codicon.css` (the `<link>` id must be `vscode-codicon-stylesheet`), `panel-style.css` and `panel.js` (with nonce); on `ready` it pushes the state and handles a queued focusAdd; `setTab` only writes the memento, without pushing; it pushes the state when the panel becomes visible; when the panel is disposed it clears the reference and the ready flag.
 - CSP: `default-src 'none'; font-src <cspSource>; style-src <cspSource> 'unsafe-inline'; script-src 'nonce-<nonce>'`; the nonce is the base64 of `randomBytes(16)`, created anew each time the HTML is generated. `'unsafe-inline'` is needed because Lit components fall back to inline `<style>` when adoptedStyleSheets is not supported.
 - File watchers: the watcher set = union of both `watchTargets()`, one `createFileSystemWatcher(new RelativePattern(Uri.file(dirname), basename))` per file; added/removed on refresh; watcher callbacks only push the state and do not resync the watchers, to avoid loops.
 - State push: `post({ type: 'state', state: { active: activeTab, locale: getLocale(), claude: tabState('claude'), codex: tabState('codex') } })`, then fire `onDidChange`. A locale change triggers `refresh()` (see extension.ts).
@@ -308,6 +312,8 @@ export class StatusBar implements vscode.Disposable {
 ```
 
 ## src/commands.ts
+
+The extension is authoritative for business logic and validation. Validate panel account directories through `panel.resolve` and account names through `validateName`; frontend validation is only immediate feedback. Catch setting-update failures (`config.update` / `setConfigDir`) and show an actionable reason; preserve the other environment entries as specified by `claudeSettings.ts`.
 
 ```ts
 export interface Deps {
@@ -402,3 +408,7 @@ Commands (category "PlanSwap", 7 in total): `planswap.tools.openClaudeMd` (Open 
 - The mode is detected from disk (`isSharedClaudeAccount` / `isSharedCodexAccount`) and exposed as `AccountView.shared`; it is never stored.
 - Messages: `add` carries `shared`; `share` converts an independent account; `tool: 'sync'` re-links every shared account of the page. Command Palette: `planswap.tools.sync` (first pick Claude Code / Codex).
 - Deleting a shared account's directory (`deleteAccountDir` / `deleteCodexDir`, `fs.rm` recursive) removes its links only; the default content is not affected (regression tests in `test/claudeShare.test.ts` / `test/codexShare.test.ts`).
+
+## src/webview/panel.css
+
+Panel colors come only from `--vscode-*` theme variables. The layout uses a 340px container-query breakpoint. Required width/language checks and preview resource cleanup are defined in [Manual Verification](manual-verification.md#preview-verification).

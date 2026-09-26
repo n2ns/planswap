@@ -139,6 +139,7 @@ Your account directories (`~/.claude-<name>` and `~/.codex-<name>`) are kept. To
 ## Documentation
 
 - [Feature reference](docs/features.md): detailed instructions for managing accounts, switching and using panel tools.
+- [Documentation map](docs/README.md): development, design, module contracts and verification guides.
 - [Blog post](https://n2ns.com/blog/switch-claude-code-codex-accounts-planswap): why PlanSwap exists and how it switches accounts without copying or swapping credentials.
 
 ## Disclaimer

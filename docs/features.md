@@ -1,6 +1,6 @@
 # Features
 
-This document describes the extension's behavior feature by feature. The implementation is based on `docs/design.md` (design) and `docs/interfaces.md` (module contract). UI texts are quoted in English; the Chinese UI shows the equivalent `zh-cn` strings (see section 11).
+Purpose: the detailed user-visible behavior of both Claude and Codex account switching, panel interactions, commands and localization. UI texts are quoted in English; the Chinese UI shows the equivalent `zh-cn` strings (see section 11). Design rationale belongs in [Claude design](design.md) / [Codex design](codex-design.md), signatures in [Interfaces](interfaces.md) / [Codex interfaces](codex-interfaces.md), and test procedures in [Manual Verification](manual-verification.md). See [Documentation](README.md) for ownership.
 
 ## 1. Accounts and directories
 

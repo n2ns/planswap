@@ -17,7 +17,7 @@ is still missing. Remove an item once it is done or decided.
   official panel) before relying on it to protect migrations.
 - **`codexAccountBusy` against a live CLI.** Same situation: exe basename `codex` + `CODEX_HOME` realpath, tested with a
   fake `/proc` only. Confirm it catches the TUI and the editor extension's `codex app-server`.
-- **Manual verification checklist** (AGENTS.md, Claude items 5, 6, 8, 12, 14, 16 and Codex items 4, 5, 8, 13) has not
+- **[Manual verification checklist](docs/manual-verification.md)** (Claude items 5, 6, 8, 12, 14, 16 and Codex items 4, 5, 8, 13) has not
   been run for this feature.
 
 ## Known gaps

@@ -3,6 +3,8 @@
 Date: 2026-09-26
 Status: implemented (v8, 2026-09-26: shared and independent accounts: a shared account links everything except its login identity to the default account's directory, an independent one gets a one-time copy of its configuration (6.7); the "Sync rules" tool is replaced by "Sync shared" (called "Re-link" since the terminology change); the `default` account can no longer be renamed (only named accounts, see 6.5); v7, 2026-09-26: English docs + i18n: English / Simplified Chinese UI selected by the `planswap.language` setting, see 5.5; v6, 2026-09-26: footer toolbar and version card, per-page "Tools" row, global rules `CLAUDE.md` shared via symlinks, every registered account can be renamed, simplified account row UI; v5: single view with tabs + account display names + email and plan display; v4: sidebar changed from a native TreeView to a Webview panel. Contract in interfaces.md)
 
+Purpose: Claude account-switching design, shared sidebar architecture, implementation rationale, upstream evidence and limitations. Exact module contracts are in [Interfaces](interfaces.md), observable behavior in [Features](features.md), and acceptance procedures in [Manual Verification](manual-verification.md). See [Documentation](README.md) for ownership.
+
 ## 1. Goals and scope
 
 - Goal: in VS Code (WSL remote window), switch between two or more Claude Code accounts from a sidebar panel; after a switch, new sessions of the official Claude Code extension use the selected account.
@@ -17,7 +19,7 @@ Status: implemented (v8, 2026-09-26: shared and independent accounts: a shared a
 
 ## 2. Background facts (verified)
 
-The following facts come from the official documentation and the source code of the locally installed official extension `anthropic.claude-code-2.1.282-linux-x64`; this design rests on them.
+The following facts come from the official documentation and the source code of the locally installed official extension `anthropic.claude-code-2.1.282-linux-x64`; this design rests on them. **Re-verify these assumptions after upgrading the official extension.**
 
 1. `CLAUDE_CONFIG_DIR` is documented, supported behavior: when it is set, `.credentials.json`, `.claude.json`, `settings.json`, `projects/` and `sessions/` all live in that directory. Each directory is an independently signed-in account. User-level MCP servers are stored in `mcpServers` of `.claude.json`, not in `settings.json`.
 2. The official extension setting `claudeCode.environmentVariables`:
@@ -291,53 +293,13 @@ Goal: when one account runs out of quota, switch to another and keep working wit
 
 ## 9. Code structure
 
-The sidebar was changed from a native TreeView to a Webview; the former `accountsView.ts` has been deleted.
+Module responsibilities, signatures and message contracts are maintained in [Interfaces](interfaces.md). The repository and build-file map is in [Development](development.md#repository-layout).
 
-```
-src/
-  extension.ts        Activation, locale setup, platform guard, wiring of all modules (two LabelStores, one AccountsPanel, ToolDeps; degraded mode when Codex initialization fails), registration of the WebviewViewProvider and three command groups, watching setting changes
-  i18n.ts             Host i18n tables (en / zh-cn) and t(); no vscode import
-  i18nVscode.ts       resolveLocale() / watchLocale() for planswap.language
-  paths.ts            Default directory, account directories, account info file location, reading email and plan (formatClaudePlan / readAccountInfo), signed-in state, directory scan, stripped settings copy (copySettingsStripped), add-only MCP server merge (syncMcpServers), delete safety checks
-  claudeShare.ts      Shared vs independent accounts (6.7): shared entries, isSharedClaudeAccount, ensureClaudeLinks, mirrorClaudeJson, claudeAccountBusy, migrateClaudeToShared, copyClaudeIndependent, plus the link / merge helpers reused by codex/codexShare.ts; no vscode import
-  shareReport.ts      describeShareReport: localized one-line summary of a share / migration report (both vendors); no vscode import
-  fileState.ts        FileMemento: vscode.Memento backed by ~/.config/planswap/state.json (account lists, ignore lists, aliases); one-time import from globalState; no vscode import
-  accounts.ts         Account list storage (state file)
-  labels.ts           LabelStore: storage and validation of per-account display names (aliases), keyed by name in claude.labels / codex.labels; labelFor(name, labels) returns the display name
-  claudeSettings.ts   Reads/writes CLAUDE_CONFIG_DIR in claudeCode.environmentVariables
-  commands.ts         Switch (re-links a shared target first) / add (shared or independent) / share (conversion) / remove / open terminal / refresh / rename; handles Claude page messages (incl. tool); Command Palette entries
-  tools.ts            Tools: runTool (open the global rules file, open extension settings, reload window, restart extension host, restart WSL server, CLI and extension versions, sync shared accounts, update CLI, open GitHub help and repository) and registerToolCommands (planswap.tools.*)
-  accountsPanel.ts    Single WebviewViewProvider: holds the claude / codex PanelSources, generates the panel HTML and CSP, pushes the full PanelState (incl. locale), remembers the current tab, maintains file watchers for both watchTargets; claudePanelSource is defined here
-  protocol.ts         Message types between the extension and the Webview (shared, no runtime imports)
-  statusBar.ts        Status bar (shows alias, email and plan)
-  codex/              Codex account switching (see codex-design.md section 10)
-  webview/
-    main.ts           Webview frontend: tab bar, rendering of both pages (banner, account list, "Tools" row, add section), footer toolbar, version card and extension version line, inline rename, live validation, messaging
-    i18n.ts           Webview i18n tables (en / zh-cn) and t() based on state.locale
-    panel.css         Panel styles (only --vscode-* theme variables; 340px container-query breakpoint; plan colors)
-    tsconfig.json     Frontend type-check config (DOM lib, includes ../protocol.ts)
-package.nls.json      English static strings for package.json
-package.nls.zh-cn.json  Chinese static strings for package.json
-```
-
-`contributes` in `package.json`: `commands` (with icons, 19 in total: 5 "Claude Account", 7 "Codex Account", 7 "PlanSwap"), `configuration` (`planswap.language`), `viewsContainers.activitybar`, `views` (a single `type: "webview"` view `planswap.accounts`, named "PlanSwap"), `menus.view/title` (only the refresh button, `when: view == planswap.accounts`). All user-facing static strings are `%key%` placeholders resolved from `package.nls*.json`. All commands stay in the Command Palette; no `menus.commandPalette` is declared; no `viewsWelcome` is declared.
+The sidebar uses a single Webview instead of the former native TreeView. Activation wires the Claude and Codex sources into one panel; the full activation sequence is documented under `src/extension.ts` in the interface contract.
 
 ## 10. Dependencies and build
 
-- Runtime dependencies (`dependencies`, pinned exactly):
-  - `@vscode-elements/elements` 2.5.1: Web Components library for the Webview frontend (based on Lit).
-  - `@vscode/codicons` 0.0.45: icon font. The npm `latest` tag points to the prerelease 0.0.46-24, which does not satisfy the component library's peer dependency `>=0.0.40` (prereleases do not take part in normal range matching), so the latest stable 0.0.45 is pinned.
-  - Both are only bundled into the frontend artifacts, never into the extension host.
-- Development dependencies (2026-09-25): typescript 7.0.2, esbuild 0.28.2, @types/node 26.6.2, @vscode/vsce 4.0.0 are the latest stable versions; @types/vscode is pinned to 1.107.0.
-- `engines.vscode` is `^1.107.0`. The editor actually used is Antigravity IDE with a VS Code 1.107.0 core; an extension whose `engines` is higher than the editor version is refused. `@types/vscode` must not be higher than `engines`, so the latest version cannot be used; check the editor's core version before upgrading. New frontend dependencies must not require newer editor APIs either.
-- Build (`esbuild.mjs`, two entries):
-  - Extension host: `src/extension.ts` → `dist/extension.js` (cjs, platform node, target node20, external vscode, with sourcemap).
-  - Webview frontend: `src/webview/main.ts` → `dist/media/panel.js`, `src/webview/panel.css` → `dist/media/panel-style.css` (iife, platform browser, target es2022; regular builds minify without sourcemaps, watch mode does not minify and emits sourcemaps).
-  - At build start, `codicon.css` and `codicon.ttf` are copied from `node_modules/@vscode/codicons/dist/` to `dist/media/` (`node_modules` is not included in the vsix).
-  - With `--watch` both entries are watched.
-- Type checking uses separate tsconfigs: `npm run typecheck` runs `tsc --noEmit` (root `tsconfig.json`, host, types node and vscode, excludes `src/webview`), `tsc --noEmit -p src/webview` (frontend, lib includes dom, no node/vscode types, includes `../protocol.ts`) and `tsc --noEmit -p test` (tests).
-- Tests: `npm test` runs `scripts/run-tests.mjs`, which bundles `test/*.test.ts` with esbuild into `.test-out/` (with `vscode` aliased to `test/stubs/vscode.ts`) and runs `node --test`. Tests cover the pure modules and run every file-system operation under a temporary HOME.
-- Packaging: `vsce package` produces the `.vsix` (`vscode:prepublish` runs typecheck and build first; `.vscodeignore` excludes `src/`, `test/`, `scripts/`, `node_modules/`, `*.map`, docs, etc.; `package.nls*.json` are included). Installation: in a WSL window via "Extensions: Install from VSIX". This extension is never installed into the user's VS Code automatically.
+Dependency pins, editor compatibility, build artifacts, type checking, tests and packaging are maintained in [Development](development.md#dependencies-and-build). Frontend/backend dependency boundaries remain part of the [interface contract](interfaces.md).
 
 ## 11. Known limitations and risks
 
