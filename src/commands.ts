@@ -4,15 +4,23 @@ import {
   NAME_RE,
   type Account,
   accountDir,
-  copySettingsStripped,
+  claudeJsonPath,
   defaultDir,
   deleteAccountDir,
   ensureAccountDir,
-  linkGlobalRules,
   readAccountInfo,
   samePath,
   sameRealPath,
 } from './paths';
+import {
+  claudeAccountBusy,
+  copyClaudeIndependent,
+  ensureClaudeLinks,
+  isSharedClaudeAccount,
+  migrateClaudeToShared,
+  mirrorClaudeJson,
+} from './claudeShare';
+import { describeShareReport } from './shareReport';
 import { currentDir, isExplicitConfigDir, setConfigDir } from './claudeSettings';
 import type { AccountStore } from './accounts';
 import type { AccountsPanel } from './accountsPanel';
@@ -65,20 +73,10 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     return picked?.account;
   }
 
-  function validateName(name: string): string | undefined {
-    if (!name) return t('name.empty');
-    if (!NAME_RE.test(name)) return t('name.invalid');
-    if (name === DEFAULT_NAME) return t('name.reserved', { name: DEFAULT_NAME });
-    if (store.find(name)) return t('name.exists');
-    if (store.all().some((a) => labelOf(a) === name)) return t('name.dupLabel');
-    if (sameRealPath(accountDir(name), defaultDir())) return t('name.sameAsDefaultDir');
-    return undefined;
-  }
-
-  // Rename: the external row cannot be renamed; label equal to name clears the alias
+  // Rename: only named rows (the default and external rows cannot be renamed); label equal to name clears the alias
   async function rename(dir: string, label: string): Promise<string | undefined> {
     const account = panel.resolve(MODE, dir);
-    if (!account || account.kind === 'external') return undefined;
+    if (!account || account.kind !== 'named') return undefined;
     const existing = store.all().map((a) => ({ name: a.name, label: labelOf(a) }));
     const error = labels.validate(label, account.name, existing);
     if (error) return error;
@@ -90,6 +88,11 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
 
   async function switchTo(account: Account): Promise<boolean> {
     if (isCurrent(account)) return true;
+    // A shared account is re-linked and mirrored first; a problem only warns, the switch still happens
+    if (account.name !== DEFAULT_NAME && isSharedClaudeAccount(account.dir)) {
+      const warning = refreshShared(account);
+      if (warning) void vscode.window.showWarningMessage(t('share.refreshWarning', { label: labelOf(account), notes: warning }));
+    }
     try {
       await setConfigDir(account.name === DEFAULT_NAME ? undefined : account.dir);
     } catch (err) {
@@ -114,25 +117,70 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     await vscode.commands.executeCommand('workbench.action.reloadWindow');
   }
 
-  async function addAccount(name: string): Promise<string | undefined> {
-    const error = validateName(name);
+  // Info file of the default account: the source of mirrored MCP servers and project settings
+  const defaultJson = (): string => claudeJsonPath(defaultDir(), isExplicitConfigDir(defaultDir()));
+
+  // shared: link everything but the login to the default account; otherwise copy its configuration once
+  async function addAccount(name: string, shared: boolean): Promise<string | undefined> {
+    const error = validateName(name, store, labels);
     if (error) return error;
     const account: Account = { name, dir: accountDir(name) };
     try {
       ensureAccountDir(account.dir);
-      copySettingsStripped(defaultDir(), account.dir);
     } catch (err) {
       return t('account.createDirFailed', { error: errText(err) });
     }
-    // Share the default account's global CLAUDE.md; failure only warns and does not block
+    // Linking or copying failures only warn and do not block
     try {
-      linkGlobalRules(account.dir);
+      if (shared) {
+        const report = ensureClaudeLinks(account.dir);
+        mirrorClaudeJson(defaultJson(), account.dir);
+        const notes = describeShareReport(report);
+        if (notes) void vscode.window.showWarningMessage(t('share.addNotes', { name, notes }));
+      } else {
+        copyClaudeIndependent(defaultJson(), account.dir);
+      }
     } catch (err) {
-      void vscode.window.showWarningMessage(t('account.linkRulesFailed', { name, file: 'CLAUDE.md', error: errText(err) }));
+      void vscode.window.showWarningMessage(t(shared ? 'share.addLinkFailed' : 'share.addCopyFailed', { name, error: errText(err) }));
     }
     await store.add(account);
     refreshUi();
     return undefined;
+  }
+
+  // Re-links a shared account and mirrors the default account's info file; returns a warning text or undefined
+  function refreshShared(account: Account): string | undefined {
+    try {
+      const notes = describeShareReport(ensureClaudeLinks(account.dir));
+      mirrorClaudeJson(defaultJson(), account.dir);
+      return notes || undefined;
+    } catch (err) {
+      return errText(err);
+    }
+  }
+
+  // Converts an independent account to a shared one after a modal confirmation
+  async function shareAccount(account: Account): Promise<void> {
+    if (account.name === DEFAULT_NAME || isSharedClaudeAccount(account.dir)) return;
+    if (isCurrent(account)) {
+      void vscode.window.showWarningMessage(t('share.current', { label: labelOf(account) }));
+      return;
+    }
+    const ok = t('share.confirmButton');
+    const picked = await vscode.window.showWarningMessage(t('share.confirm', { label: labelOf(account), dir: account.dir }), { modal: true }, ok);
+    if (picked !== ok) return;
+    if (claudeAccountBusy(account.dir)) {
+      void vscode.window.showWarningMessage(t('share.busy', { name: labelOf(account) }));
+      return;
+    }
+    try {
+      const report = migrateClaudeToShared(account.dir, account.name);
+      mirrorClaudeJson(defaultJson(), account.dir);
+      void vscode.window.showInformationMessage(t('share.done', { label: labelOf(account), summary: describeShareReport(report) || t('share.nothingElse') }));
+    } catch (err) {
+      void vscode.window.showErrorMessage(t('share.failed', { label: labelOf(account), error: errText(err) }));
+    }
+    refreshUi();
   }
 
   // confirmed: the panel already did an inline confirmation; Command Palette entries need a modal confirmation
@@ -151,11 +199,12 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
 
     // Capture the display name before its alias is cleared, so the prompt below still shows it
     const label = labelOf(account);
+    const shared = isSharedClaudeAccount(account.dir);
     await store.remove(account.name);
     await labels.remove(account.name);
     refreshUi();
 
-    const detail = t('claude.removeDirDetail');
+    const detail = t(shared ? 'share.removeDirDetail' : 'claude.removeDirDetail');
     const deleteDirLabel = t('common.deleteDir');
     const delDir = await vscode.window.showWarningMessage(
       t('account.removeDirPrompt', { label, dir: account.dir }),
@@ -202,8 +251,13 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
         return;
       }
       case 'add':
-        panel.post({ type: 'addResult', mode: MODE, error: await addAccount(msg.name.trim()) });
+        panel.post({ type: 'addResult', mode: MODE, error: await addAccount(msg.name.trim(), msg.shared !== false) });
         return;
+      case 'share': {
+        const a = panel.resolve(MODE, msg.dir);
+        if (a?.kind === 'named') await shareAccount(a);
+        return;
+      }
       case 'rename':
         panel.post({ type: 'renameResult', mode: MODE, dir: msg.dir, error: await rename(msg.dir, msg.label) });
         return;
@@ -259,6 +313,17 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
       }
     }),
   ];
+}
+
+// Name check for a new Claude account; only Claude accounts are compared
+export function validateName(name: string, store: AccountStore, labels: LabelStore): string | undefined {
+  if (!name) return t('name.empty');
+  if (!NAME_RE.test(name)) return t('name.invalid');
+  if (name === DEFAULT_NAME) return t('name.reserved', { name: DEFAULT_NAME });
+  if (store.find(name)) return t('name.exists');
+  if (store.all().some((a) => labelFor(a.name, labels) === name)) return t('name.dupLabel');
+  if (sameRealPath(accountDir(name), defaultDir())) return t('name.sameAsDefaultDir');
+  return undefined;
 }
 
 // Wrap in single quotes; inner ' becomes '\''

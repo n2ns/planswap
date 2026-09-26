@@ -251,7 +251,7 @@ body {
 .row > .avatar { grid-area: avatar; align-self: start; }
 .row-main { display: contents; }
 .row-title { grid-area: title; display: flex; align-items: center; min-width: 0; }
-.row-name { flex: 1 1 auto; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.row-name { flex: 0 1 auto; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .row.is-current .row-name { font-size: 1.05em; font-weight: 700; }
 /* Current-account badge: 16px raised disc, light-to-dark gradient + top highlight + drop shadow; an outer ring of base color separates it from the card */
 .current-icon {
@@ -271,6 +271,21 @@ body {
     0 1px 2px rgba(0, 0, 0, 0.45);
 }
 .current-icon vscode-icon { color: #fff; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35)); }
+/* Shared-account badge: 16px flat disc right after the name, same size as the current-account badge */
+.shared-icon {
+  flex: none;
+  /* Right margin keeps a gap to the current-account badge (margin-left: auto) when the name fills the line */
+  margin: 0 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+.shared-icon vscode-icon { color: var(--ink); }
 .row-sub { grid-area: sub; margin-top: 2px; color: var(--muted); font-size: 0.88em; min-width: 0; overflow-wrap: anywhere; }
 .row-sub.ok { display: flex; align-items: center; gap: 5px; }
 .row-sub.ok::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
@@ -408,7 +423,7 @@ body {
 /* ---------- Page tools: three small text buttons, at least 96px each; they wrap when they do not fit (2+1 or stacked) and stretch to fill the line ---------- */
 .page-tools-row { display: flex; flex-wrap: wrap; gap: var(--gap); min-width: 0; }
 .page-tools-row vscode-button {
-  flex: 1 1 96px;
+  flex: 1 1 auto;
   min-width: 0;
   height: 26px;
   --vsc-border-left-radius: 6px;
@@ -471,6 +486,8 @@ body {
 .input-group vscode-button:not([disabled]):hover::part(base) { filter: brightness(1.12); }
 .input-group vscode-button:not([disabled]):focus-visible::part(base),
 .input-group vscode-button:not([disabled])[focused]::part(base) { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+/* Shared / independent choice under the input: full width, the label wraps on narrow panels */
+.add-shared { display: block; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .help { color: var(--muted); font-size: 0.8em; padding: 0 2px; min-width: 0; overflow-wrap: anywhere; }
 .help.error { color: var(--error); }
 

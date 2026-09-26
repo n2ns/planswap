@@ -7,6 +7,16 @@
 - **Update CLI** in both tabs' Tools rows: runs `claude update` or `env -u CODEX_HOME codex update` in a visible terminal. The Codex command supports updating a default-home standalone installation after switching accounts.
 - **User guide** and **Star** footer buttons that open the GitHub README and repository.
 - A separate small version line below the footer buttons, populated from the extension manifest at build time.
+- **Shared and independent accounts** (Claude and Codex): the add section has a **Share settings and history with the default account** checkbox, checked by default. A shared account symlinks everything except its sign-in to the default account's directory, including settings, rules, skills, history and sessions. You can switch when one account runs out of quota and keep working in the same sessions. Claude MCP servers and project trust settings are mirrored from the default account's `.claude.json`. Codex memories stay per account. An independent account gets a one-time copy of the default configuration and its MCP servers. Shared rows show a link badge.
+- **Share with the default account** on independent account rows: after a confirmation and a check that no Claude Code / Codex process still uses the account, its history and settings are moved into the default account and replaced by links. Existing default files are never overwritten; files that differ are kept for manual merging.
+- Shared accounts are re-linked (and, for Claude, their `.claude.json` mirrored) before switching to them. Problems only produce a warning.
+
+### Changed
+
+- The Tools row's **Sync rules** button and the Command Palette command **Sync Global Rules to Other Accounts** are replaced by **Sync shared** and **Sync Shared Accounts with the Default Account** (`aiSwitcher.tools.sync`). They re-link every shared account of the vendor and leave independent accounts untouched.
+- New accounts no longer link only `CLAUDE.md` / `AGENTS.md`. A shared account links all shared entries, and an independent account gets a copy of them.
+- Missing shared entries are created empty in `~/.claude` / `~/.codex` as link targets, and sharing an account moves its files there. Existing files of the default account are never overwritten.
+- The `default` account can no longer be renamed on either tab; it is always shown as `default`, and an alias set earlier is ignored.
 
 ## [0.1.2] - 2026-09-26
 

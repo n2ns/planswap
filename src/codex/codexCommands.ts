@@ -13,11 +13,11 @@ import {
   codexDefaultDir,
   codexLoggedIn,
   readCodexAccountInfo,
-  copyCodexSeed,
   deleteCodexDir,
   ensureCodexDir,
-  linkGlobalRules,
 } from './codexPaths';
+import { codexAccountBusy, copyCodexIndependent, ensureCodexLinks, isSharedCodexAccount, migrateCodexToShared } from './codexShare';
+import { describeShareReport } from '../shareReport';
 import {
   STATE_FILE,
   effectiveDir,
@@ -104,6 +104,7 @@ export function codexPanelSource(store: CodexAccountStore, labels: LabelStore): 
       dirLabel: tildify(a.dir),
       ...readCodexAccountInfo(a.dir),
       isCurrent: samePath(a.dir, cur),
+      shared: a.name === CODEX_DEFAULT_NAME ? undefined : isSharedCodexAccount(a.dir),
     }));
     if (!rows.some((r) => r.isCurrent)) {
       rows.push({
@@ -269,6 +270,15 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
     const continueLabel = t('common.continue');
     const ok = await vscode.window.showWarningMessage(confirmText, { modal: true }, continueLabel);
     if (ok !== continueLabel) return;
+    // A shared account is re-linked first; a problem only warns, the switch still happens
+    if (account.name !== CODEX_DEFAULT_NAME && isSharedCodexAccount(account.dir)) {
+      try {
+        const notes = describeShareReport(ensureCodexLinks(account.dir));
+        if (notes) void vscode.window.showWarningMessage(t('share.refreshWarning', { label: labelOf(account), notes }));
+      } catch (err) {
+        void vscode.window.showWarningMessage(t('share.refreshWarning', { label: labelOf(account), notes: errText(err) }));
+      }
+    }
     try {
       writeSelectedDir(account.name === CODEX_DEFAULT_NAME ? undefined : account.dir);
     } catch (err) {
@@ -280,20 +290,10 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
     if (auto) restart();
   }
 
-  function validateName(name: string): string | undefined {
-    if (!name) return t('name.empty');
-    if (!NAME_RE.test(name)) return t('name.invalid');
-    if (name === CODEX_DEFAULT_NAME) return t('name.reserved', { name: CODEX_DEFAULT_NAME });
-    if (store.find(name)) return t('name.exists');
-    if (store.all().some((a) => labelOf(a) === name)) return t('name.dupLabel');
-    if (sameRealPath(codexAccountDir(name), codexDefaultDir())) return t('name.sameAsDefaultDir');
-    return undefined;
-  }
-
-  // Rename: the external row cannot be renamed; label equal to name clears the alias
+  // Rename: only named rows (the default and external rows cannot be renamed); label equal to name clears the alias
   async function rename(dir: string, label: string): Promise<string | undefined> {
     const account = panel.resolve(MODE, dir);
-    if (!account || account.kind === 'external') return undefined;
+    if (!account || account.kind !== 'named') return undefined;
     const existing = store.all().map((a) => ({ name: a.name, label: labelOf(a) }));
     const error = labels.validate(label, account.name, existing);
     if (error) return error;
@@ -303,36 +303,64 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
     return undefined;
   }
 
-  async function addAccount(name: string): Promise<string | undefined> {
-    const error = validateName(name);
+  // shared: link everything but the login to the default account; otherwise copy its configuration once
+  async function addAccount(name: string, shared: boolean): Promise<string | undefined> {
+    const error = validateName(name, store, labels);
     if (error) return error;
     const account: CodexAccount = { name, dir: codexAccountDir(name) };
     try {
       ensureCodexDir(account.dir);
-      const result = copyCodexSeed(codexDefaultDir(), account.dir);
-      // "Source missing" / "target exists" are normal and not reported; only blocked or unreadable files are
-      const normal = [t('codex.seed.srcMissing'), t('codex.seed.dstExists')];
-      const notable = result.skipped.filter((s) => !normal.includes(s.reason));
-      if (notable.length) {
-        void vscode.window.showInformationMessage(
-          t('codex.seedSkipped', {
-            name,
-            list: notable.map((s) => t('codex.seedSkippedItem', { file: s.file, reason: s.reason })).join('\n'),
-          }),
-        );
-      }
     } catch (err) {
       return t('account.createDirFailed', { error: errText(err) });
     }
-    // Share the default account's global AGENTS.md (an own file copied by the seed is kept); failure only warns and does not block
+    // Linking or copying failures only warn and do not block
     try {
-      linkGlobalRules(account.dir);
+      if (shared) {
+        const notes = describeShareReport(ensureCodexLinks(account.dir));
+        if (notes) void vscode.window.showWarningMessage(t('share.addNotes', { name, notes }));
+      } else {
+        const result = copyCodexIndependent(account.dir);
+        // "Source missing" / "target exists" are normal and not reported; only blocked or unreadable files are
+        const normal = [t('codex.seed.srcMissing'), t('codex.seed.dstExists')];
+        const notable = result.skipped.filter((s) => !normal.includes(s.reason));
+        if (notable.length) {
+          void vscode.window.showInformationMessage(
+            t('codex.seedSkipped', {
+              name,
+              list: notable.map((s) => t('codex.seedSkippedItem', { file: s.file, reason: s.reason })).join('\n'),
+            }),
+          );
+        }
+      }
     } catch (err) {
-      void vscode.window.showWarningMessage(t('account.linkRulesFailed', { name, file: 'AGENTS.md', error: errText(err) }));
+      void vscode.window.showWarningMessage(t(shared ? 'share.addLinkFailed' : 'share.addCopyFailed', { name, error: errText(err) }));
     }
     await store.add(account);
     panel.refresh();
     return undefined;
+  }
+
+  // Converts an independent account to a shared one after a modal confirmation
+  async function shareAccount(account: CodexAccount): Promise<void> {
+    if (account.name === CODEX_DEFAULT_NAME || isSharedCodexAccount(account.dir)) return;
+    if (isEffective(account) || isSelected(account)) {
+      void vscode.window.showWarningMessage(t('share.current', { label: labelOf(account) }));
+      return;
+    }
+    const ok = t('share.confirmButton');
+    const picked = await vscode.window.showWarningMessage(t('share.confirmCodex', { label: labelOf(account), dir: account.dir }), { modal: true }, ok);
+    if (picked !== ok) return;
+    if (codexAccountBusy(account.dir)) {
+      void vscode.window.showWarningMessage(t('share.busyCodex', { name: labelOf(account) }));
+      return;
+    }
+    try {
+      const report = migrateCodexToShared(account.dir, account.name);
+      void vscode.window.showInformationMessage(t('share.done', { label: labelOf(account), summary: describeShareReport(report) || t('share.nothingElse') }));
+    } catch (err) {
+      void vscode.window.showErrorMessage(t('share.failed', { label: labelOf(account), error: errText(err) }));
+    }
+    panel.refresh();
   }
 
   // confirmed: the panel already did an inline confirmation; Command Palette entries need a modal confirmation
@@ -354,11 +382,12 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
 
     // Capture the alias before labels.remove clears it
     const label = labelOf(account);
+    const shared = isSharedCodexAccount(account.dir);
     await store.remove(account.name);
     await labels.remove(account.name);
     panel.refresh();
 
-    const detail = t('codex.removeDirDetail');
+    const detail = t(shared ? 'share.removeDirDetail' : 'codex.removeDirDetail');
     const deleteDirLabel = t('common.deleteDir');
     const delDir = await vscode.window.showWarningMessage(
       t('account.removeDirPrompt', { label, dir: account.dir }),
@@ -408,8 +437,13 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
         return;
       }
       case 'add':
-        panel.post({ type: 'addResult', mode: MODE, error: await addAccount(msg.name.trim()) });
+        panel.post({ type: 'addResult', mode: MODE, error: await addAccount(msg.name.trim(), msg.shared !== false) });
         return;
+      case 'share': {
+        const a = panel.resolve(MODE, msg.dir);
+        if (a?.kind === 'named') await shareAccount(a);
+        return;
+      }
       case 'rename':
         panel.post({ type: 'renameResult', mode: MODE, dir: msg.dir, error: await rename(msg.dir, msg.label) });
         return;
@@ -448,4 +482,15 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
       panel.refresh();
     }),
   ];
+}
+
+// Name check for a new Codex account; only Codex accounts are compared (the same name as on the Claude side is allowed)
+export function validateName(name: string, store: CodexAccountStore, labels: LabelStore): string | undefined {
+  if (!name) return t('name.empty');
+  if (!NAME_RE.test(name)) return t('name.invalid');
+  if (name === CODEX_DEFAULT_NAME) return t('name.reserved', { name: CODEX_DEFAULT_NAME });
+  if (store.find(name)) return t('name.exists');
+  if (store.all().some((a) => labelFor(a.name, labels) === name)) return t('name.dupLabel');
+  if (sameRealPath(codexAccountDir(name), codexDefaultDir())) return t('name.sameAsDefaultDir');
+  return undefined;
 }

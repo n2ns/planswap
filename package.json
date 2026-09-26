@@ -140,10 +140,10 @@
         "icon": "$(info)"
       },
       {
-        "command": "aiSwitcher.tools.syncRules",
-        "title": "%command.tools.syncRules%",
+        "command": "aiSwitcher.tools.sync",
+        "title": "%command.tools.sync%",
         "category": "%category.tools%",
-        "icon": "$(link)"
+        "icon": "$(sync)"
       }
     ],
     "configuration": {

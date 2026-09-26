@@ -4,6 +4,8 @@ import { t, translationsOf } from './i18n';
 
 // Internal sentinel name of the "external directory" row; never displayed (see labelFor). '<' cannot pass NAME_RE.
 export const EXTERNAL_NAME = '<external>';
+// Name of the default account on both sides (paths.DEFAULT_NAME / codexPaths.CODEX_DEFAULT_NAME); it cannot be renamed
+const DEFAULT_NAME = 'default';
 const MAX_LABEL_LENGTH = 32;
 
 type Labels = Record<string, string>;
@@ -12,7 +14,6 @@ export class LabelStore {
   constructor(
     private readonly state: Memento,
     private readonly key: 'claude.labels' | 'codex.labels',
-    private readonly legacyKey: 'claude.defaultLabel' | 'codex.defaultLabel',
   ) {}
 
   /** Returns undefined when not set */
@@ -53,21 +54,14 @@ export class LabelStore {
     return undefined;
   }
 
-  // Reads all aliases; on first read migrates the legacy single-value key to { default: <old value> } and deletes it
   private read(): Labels {
-    const stored = this.state.get<Labels>(this.key);
-    if (stored) return stored;
-    const legacy = this.state.get<string>(this.legacyKey);
-    if (!legacy) return {};
-    const migrated: Labels = { default: legacy };
-    void this.state.update(this.key, migrated);
-    void this.state.update(this.legacyKey, undefined);
-    return migrated;
+    return this.state.get<Labels>(this.key) ?? {};
   }
 }
 
-/** Display name: the alias if set, otherwise the name; the external row gets its localized name */
+/** Display name: the alias if set, otherwise the name; the external row gets its localized name; default is always shown as is (a stored alias is ignored) */
 export function labelFor(name: string, labels: LabelStore): string {
   if (name === EXTERNAL_NAME) return t('account.external');
+  if (name === DEFAULT_NAME) return name;
   return labels.get(name) ?? name;
 }

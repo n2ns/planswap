@@ -1,7 +1,7 @@
 # Codex Account Switching: Design
 
 Date: 2026-09-26
-Status: implemented (v7, 2026-09-26: the WSL server restart works per editor kind detected from a whitelist of server data directories: Antigravity and VSCodium restart automatically, VS Code and unrecognized editors only get manual instructions (section 5); v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `aiSwitcher.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
+Status: implemented (v8, 2026-09-26: shared and independent accounts (8.6): a shared account links everything except its login identity and memories to `~/.codex`, an independent one gets a one-time copy of its configuration; `AGENTS.md` is no longer linked on its own; the `default` account can no longer be renamed (only named accounts, 8.5); v7, 2026-09-26: the WSL server restart works per editor kind detected from a whitelist of server data directories: Antigravity and VSCodium restart automatically, VS Code and unrecognized editors only get manual instructions (section 5); v6, 2026-09-26: English docs + i18n: the Codex page, commands and messages are localized in English / Simplified Chinese following `aiSwitcher.language`, while the rc marker block stays byte-identical; v5: single view with tabs + account display names + read-only `auth.json` for email and plan; on 2026-09-25 the constraint "do not decode tokens, do not show emails" was lifted at the user's request; since 2026-09-26 every registered account can be renamed, and `AGENTS.md` is shared through symlinks. Contract in codex-interfaces.md)
 
 ## 1. Goals and scope
 
@@ -11,7 +11,8 @@ Status: implemented (v7, 2026-09-26: the WSL server restart works per editor kin
 - Cost accepted by the user: switching the Codex account requires restarting the editor's server inside WSL (automatic only for Antigravity and VSCodium, see section 5). All WSL windows disconnect and each shows "Cannot reconnect. Please reload the window." once; the user clicks "Reload Window" once in each window. Integrated terminals close.
 - Non-goals:
   - `auth.json` is read-only, and only the JWT payload of its `tokens.id_token` is decoded (signature not verified) to display email and plan; no token is ever copied, swapped, cached or output (the raw `access_token`/`refresh_token`/`id_token` never reach logs, state, messages or the UI). `auth.json` is never written.
-  - Never modify the contents of `~/.codex`, with one exception: when `AGENTS.md` is missing, an empty file is created as the target of the other account directories' symlinks.
+  - Never read, copy, move or link `auth.json` of any account into another directory.
+  - Existing content of `~/.codex` is never overwritten. It is only changed for shared accounts (8.6): a shared entry missing there is created empty as the link target, and converting an independent account moves its files in (a file that differs is kept next to the default one as `<name>.from-<account>`).
   - No usage display, no calls to any non-public interface, no automatic switching when the quota runs out.
   - Do not use `chatgpt.cliExecutable`; do not depend on extension activation order.
 
@@ -32,6 +33,14 @@ Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.c
 11. Server layouts: Antigravity `~/.antigravity-ide-server/bin/<ideVersion>-<commit>/`, VSCodium `~/.vscodium-server/bin/<commit>/`, VS Code `~/.vscode-server/bin/<commit>/`. The server root (= `vscode.env.appRoot`) contains `product.json` with a top-level `commit`.
 12. VSCodium's server works like Antigravity's: the pid file `<dataDir>/.<commit>.pid` holds the pid of the wrapper `sh <root>/bin/<serverApplicationName>`, which is the parent of `node <root>/out/server-main.js --start-server ...`, which is the extension host's parent (`process.ppid`). Both auto-shut down 300 seconds after the last window disconnects (`--enable-remote-auto-shutdown`).
 13. VS Code (Microsoft's remote-wsl) has no pid file and no `--start-server`; its Windows-side wslDaemon caches the resolved port, so after the server is killed a reloaded window can receive a stale port while other windows keep the daemon alive. Closing all VS Code windows connected to the distro makes the daemon exit (3 s) and stop the server; reopening starts a new one. Therefore VS Code's server is never restarted automatically. (Read from the remote-wsl 0.104.3 source `dist/node/wslDaemon.js` and `scripts/wslServer.sh`; not verified at runtime.)
+
+The following facts about shared accounts come from codex-cli 0.157.1 (source and tests in a temporary `CODEX_HOME`; re-verify after upgrades):
+
+14. Edits of `config.toml` resolve symlinks before writing, so a linked config stays a link and the default file receives the change.
+15. The thread databases (`state_5.sqlite`, `thread_history_1.sqlite`, `goals_1.sqlite`, `queue_1.sqlite`; bundled SQLite in WAL mode) work through file symlinks: SQLite creates a missing database at the link target and puts its `-wal` / `-shm` files next to the resolved target, so every account sees the same database (tested). Codex reconciles thread metadata from the rollout files under `sessions/`.
+16. `history.jsonl` is appended to in place; deleting a thread rewrites `session_index.jsonl` by rename, which replaces the link of that account by a regular file (repaired by merging the lines back, 8.6). `.tmp/rollout-compression.lock` is created with `O_EXCL`, which fails on a dangling link, so it is not shared; `.tmp/rollout-maintenance.lock` is an flock file and is shared so two accounts do not maintain the shared rollouts at once.
+17. Codex refuses a symlinked memories root, so `memories/` and the memories databases stay per account.
+18. Resuming a thread across accounts is not blocked locally, but reasoning and compaction items carry `encrypted_content` bound to the organization that produced it; the server may reject resuming another organization's session ("encrypted content organization_id did not match").
 
 ## 3. Overall design
 
@@ -121,7 +130,7 @@ fi
 - `globalState`:
   - `codex.accounts`: `Array<{ name, dir }>`, the list of non-default accounts.
   - `codex.ignoredDirs`: directories of accounts removed while keeping the directory; automatic scanning skips them.
-  - `codex.labels`: per-account display names (aliases), `Record<string /*name*/, string /*label*/>`, keyed by account name; no entry means not set (the name is shown). The legacy single-value key `codex.defaultLabel` is migrated to `{ default: <old value> }` on first read and deleted. Stored and validated by the `LabelStore` in `labels.ts` with the same rules as on the Claude side (see design.md section 4): every registered account (including default) can have an alias, the external-directory row cannot; must not equal the name or label of another Codex account; display-only, the directory does not change; when adding an account the name must not equal the name or label of any Codex account; removing an account clears its alias. Independent of `claude.labels`; the same name is allowed on both sides.
+  - `codex.labels`: per-account display names (aliases), `Record<string /*name*/, string /*label*/>`, keyed by account name; no entry means not set (the name is shown). Stored and validated by the `LabelStore` in `labels.ts` with the same rules as on the Claude side (see design.md section 4): every named account can have an alias, the default account and the external-directory row cannot; must not equal the name or label of another Codex account; display-only, the directory does not change; when adding an account the name must not equal the name or label of any Codex account; removing an account clears its alias. Independent of `claude.labels`; the same name is allowed on both sides.
 - The selected account is whatever the state file says (shared across windows, the last writer wins).
 - The directory actually effective in this window = the extension host's own `process.env.CODEX_HOME`, or `~/.codex` when empty. With remote type `wsl` the Codex extension does not rewrite it. The panel marks it as "current"; when it differs from the state file, "X selected; takes effect after restarting the server" is shown (X is the display name; an unregistered directory shows its path).
 - Signed-in state: whether `<dir>/auth.json` exists.
@@ -131,14 +140,15 @@ fi
 
 - The activity bar container "AI Account Switcher" ("AI 账号切换器") holds a single Webview view `aiSwitcher.accounts`, also named "AI Account Switcher"; the tab bar at the top of the panel switches between the Claude and Codex pages. The Codex page is a page rendered by the same `AccountsPanel` instance from the data provided by `codexPanelSource` (the current tab is stored in the memento `panel.activeTab`, see design.md 5.1). The frontend uses page-specific texts, all from the Webview i18n tables in the current UI language (see design.md 5.5).
 - While not enabled, the Codex page only shows an explanation, the "Enable Codex switching" button and the "Tools" row.
-- Once enabled the layout matches the Claude page: account list (current account pinned to the first row), "Tools" row, add input at the bottom; every non-external row also has a pencil icon for renaming (aliases stored per account in `codex.labels`).
+- Once enabled the layout matches the Claude page: account list (current account pinned to the first row), "Tools" row, add input at the bottom; every named account row also has a pencil icon for renaming (aliases stored per account in `codex.labels`).
 - Differences:
   - Switch button → modal confirmation → write the state file → restart the server. There is no reload banner; when the state file and the effective directory differ, the top shows "X selected; takes effect after restarting the server" and a "Restart server" button.
   - Current and other rows: email and plan when there is an email (`Plus`, `Pro`, `Team`, `API key`, etc.); "Logged in" when signed in without email; "Not logged in" when signed out.
   - The "Log in" button of signed-out accounts runs `env CODEX_HOME='<dir>' codex login` in a terminal; alternatively switch and sign in directly in the Codex panel (the directory is empty, so no account is revoked).
   - The terminal icon of signed-in accounts runs `env CODEX_HOME='<dir>' codex`.
   - The current account cannot be removed.
-  - The "Tools" row has `AGENTS.md` (opens `<effectiveDir()>/AGENTS.md`), the Codex extension settings (`chatgpt.`), "Sync rules" (links `AGENTS.md` of the default account into the other Codex accounts), and "Update CLI" (opens a terminal and runs `env -u CODEX_HOME codex update`; see features.md section 5.5).
+  - The add section has the shared checkbox (help line for a valid name, checked: `codex.addHelpShared` "Will create ~/.codex-<name> sharing settings, sessions and history with the default account (memories stay per account)"); shared rows have the `link` badge and independent rows that are not current have the "Share with the default account" button (the host also refuses the selected account, 8.6), as on the Claude page.
+  - The "Tools" row has `AGENTS.md` (opens `<effectiveDir()>/AGENTS.md`), the Codex extension settings (`chatgpt.`), "Sync shared" (re-links every shared Codex account, 8.6), and "Update CLI" (opens a terminal and runs `env -u CODEX_HOME codex update`; see features.md section 5.5).
 
 ## 8. Commands and flows
 
@@ -161,21 +171,21 @@ A switch request that arrives while another switch is in progress (e.g. its moda
 1. Return immediately when the target equals both the directory effective in this window and the content of the state file.
 2. Report an error and return when the target directory does not exist.
 3. Modal confirmation (text from section 5, depending on the editor kind).
-4. Write the state file atomically (empty for the default account).
+4. If the target is a shared account, `ensureCodexLinks` runs first (8.6); a non-empty report or an error only shows the warning "Re-linking X to the default account reported: …". Then write the state file atomically (empty for the default account).
 5. Automatic kinds: restart the server as in section 5; when the checks fail, show the manual method. Manual kinds: nothing more (the confirmation already showed the manual method).
 
 ### 8.2 Add
 
 1. Name validation as on the Claude side: `^[A-Za-z0-9_-]+$`, not equal to `default`, not equal to the name or label of any Codex account, `~/.codex-<name>` not equal to `~/.codex` (compared after resolving symlinks).
 2. Create `~/.codex-<name>` (0700).
-3. Copy `config.toml` from `~/.codex` as a starting point (`copyCodexSeed`; an existing target is never overwritten, mode 0600). `AGENTS.md` is not copied; instead `linkGlobalRules(dir)` symlinks it to the default account's file (see "Shared global rules" in interfaces.md). If `config.toml` contains any of the following top-level keys it is not copied and the reason is explained: `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`; `model_providers` in any form (a `[model_providers]` / `[model_providers.x]` table, a dotted key `model_providers.x.base_url = …`, an inline table `model_providers = { … }`) also prevents copying. Keys are matched after normalizing quotes and whitespace around dots (`"model_provider" = …`, `[ model_providers.x ]`), and a dotted key or table header counts when its first segment is blocked. Nothing else is copied (including `packages/`; the CLI binary stays under `~/.codex/packages` and keeps working).
+3. Shared (checkbox checked, the default): `ensureCodexLinks(dir)`; a non-empty report is shown as a warning (e.g. `config.toml` "not shared for safety"). Independent: `copyCodexIndependent(dir)` copies once, never overwriting: `config.toml` from `~/.codex` as a starting point (`copyCodexSeed`, mode 0600), then `AGENTS.md` and `hooks.json` (0600), the folders `rules`, `hooks`, `agents`, `themes` and the children of `skills/` except `.system`. If `config.toml` contains any of the following top-level keys it is not copied and the reason is explained: `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`; `model_providers` in any form (a `[model_providers]` / `[model_providers.x]` table, a dotted key `model_providers.x.base_url = …`, an inline table `model_providers = { … }`) also prevents copying. Keys are matched after normalizing quotes and whitespace around dots (`"model_provider" = …`, `[ model_providers.x ]`), and a dotted key or table header counts when its first segment is blocked. Nothing else is copied (including `packages/`; the CLI binary stays under `~/.codex/packages` and keeps working). `auth.json` is never copied or linked. A failure of this step only warns and does not block; a failure to create the directory is reported in the help line and nothing is registered.
 4. Register the account, refresh the view.
 
 ### 8.3 Remove
 
 - The default account, the account effective in this window and the account the state file currently points to cannot be removed.
-- Remove it from the list and record it in `codex.ignoredDirs`, clear its alias with `labels.remove(name)`; then confirm with a modal whether to delete the directory.
-- Checks before deleting the directory: a direct child of the home directory; the basename matches `^\.codex-[A-Za-z0-9_-]+$`; not equal to `~/.codex` after resolving symlinks; not a symlink; no live daemon. Daemon check: read `daemon.pid`, `app-server.pid`, `daemon-updater.pid`, `app-server-updater.pid` under `<dir>/app-server-daemon/` (whichever exist); the content is JSON; take `pid` and `processStartTime`/`processIdentity.startTicks` and compare with the start time in `/proc/<pid>/stat`; a match means alive and deletion is refused; a missing file or parse failure counts as not alive. When the checks pass, delete with `fs.rm` and remove the directory from `codex.ignoredDirs` (`store.unignore`).
+- Remove it from the list and record it in `codex.ignoredDirs`, clear its alias with `labels.remove(name)`; then confirm with a modal whether to delete the directory (detail `codex.removeDirDetail`; for a shared account `share.removeDirDetail`: "This shared account's directory only holds its login credentials and account caches; its history, settings and other shared data live in the default account and are kept. The login cannot be recovered once deleted.").
+- Checks before deleting the directory: a direct child of the home directory; the basename matches `^\.codex-[A-Za-z0-9_-]+$`; not equal to `~/.codex` after resolving symlinks; not a symlink; no live daemon. Daemon check: read `daemon.pid`, `app-server.pid`, `daemon-updater.pid`, `app-server-updater.pid` under `<dir>/app-server-daemon/` (whichever exist); the content is JSON; take `pid` and `processStartTime`/`processIdentity.startTicks` and compare with the start time in `/proc/<pid>/stat`; a match means alive and deletion is refused; a missing file or parse failure counts as not alive. When the checks pass, delete with `fs.rm` and remove the directory from `codex.ignoredDirs` (`store.unignore`). For a shared account this removes only its own files and its links (`fs.rm` does not follow symlinks; covered by a test).
 - **Note: the daemon check depends on the JSON format of codex's pid files (field names `pid`, `processIdentity.startTicks` / `processStartTime`); re-verify after codex upgrades.**
 
 ### 8.4 Terminal
@@ -185,7 +195,27 @@ A switch request that arrives while another switch is in progress (e.g. its moda
 
 ### 8.5 Rename an account
 
-Panel `rename` message (with `dir` and `label`) → `panel.resolve('codex', dir)` finds the row (ignored when not found or when `kind === 'external'`; the external-directory row cannot be renamed) → `labels.validate(label, account.name, store.all().map(a => ({ name: a.name, label: labelFor(a.name, labels) })))`; on error `post({ type: 'renameResult', mode: 'codex', dir, error })`; when valid `labels.set(account.name, <trimmed value>)` (cleared when it equals the account's own name) → `panel.refresh()` → `post({ type: 'renameResult', mode: 'codex', dir })`. The directory does not change; validation only looks at Codex accounts, and the same name as on the Claude side is allowed.
+Panel `rename` message (with `dir` and `label`) → `panel.resolve('codex', dir)` finds the row (ignored when not found or when `kind !== 'named'`; the default row and the external-directory row cannot be renamed) → `labels.validate(label, account.name, store.all().map(a => ({ name: a.name, label: labelFor(a.name, labels) })))`; on error `post({ type: 'renameResult', mode: 'codex', dir, error })`; when valid `labels.set(account.name, <trimmed value>)` (cleared when it equals the account's own name) → `panel.refresh()` → `post({ type: 'renameResult', mode: 'codex', dir })`. The directory does not change; validation only looks at Codex accounts, and the same name as on the Claude side is allowed.
+
+### 8.6 Shared and independent accounts
+
+Same model as on the Claude side (design.md 6.7), implemented in `src/codex/codexShare.ts` (no vscode import), reusing the report types and link / merge helpers of `src/claudeShare.ts`.
+
+- **Mode detection**: shared iff `<dir>/sessions` is a symlink whose real path equals that of `~/.codex/sessions` (`isSharedCodexAccount`); never stored.
+- **Shared entries** (`CODEX_SHARED_ENTRIES`, absolute symlinks to the same entry of `~/.codex`):
+  - `file` (created empty in `~/.codex` when missing; `hooks.json` gets `{}`): `config.toml`, `AGENTS.md`, `hooks.json`, `history.jsonl`, `session_index.jsonl`;
+  - `link-only` (linked even while the target does not exist; never pre-created, fact 15): `state_5.sqlite`, `thread_history_1.sqlite`, `goals_1.sqlite`, `queue_1.sqlite`, `.tmp/rollout-maintenance.lock` (the account's `.tmp` is a real folder created 0700, `.tmp` itself is never linked, and `~/.codex/.tmp` is created so opening the link with `O_CREAT` works);
+  - `dir`: `sessions` (marker), `archived_sessions`, `rules`, `hooks`, `agents`, `themes`, `thread-writer-locks`, `rollout-migrations`, `attachments`, `generated_images`, `shell_snapshots`, `tui-thread-reference-capabilities`;
+  - per child (`CODEX_CHILD_SHARED_DIRS`): `skills` except `.system`, `plugins/cache` except `openai-curated-remote`.
+- **Never touched**: `auth.json`, `.credentials.json`, `.env`, `models_cache.json`, `cache/`, `memories/`, `memories_*.sqlite`, `memories_extensions/`, `logs_2.sqlite`, `log/`, `app-server-daemon/`, `app-server-control/`, `ipc/`, `packages/`, `tmp/`, `mcp-oauth-locks/`, `installation_id`, `version.json`, `.sandbox_migration`, `vendor_imports/`, `worktrees/`, the rest of `plugins/`, `.remote-plugin-install-staging`, `skills/.system`, `.tmp/rollout-compression.lock` (fact 16).
+- **`config.toml` refusal**: not linked (reported under `refused`) when the default config cannot be read or `blockedConfigReason` finds one of `CODEX_IDENTITY_CONFIG_KEYS` (`model_provider`, `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `cli_auth_credentials_store`, `mcp_oauth_credentials_store`, `chatgpt_base_url`, `openai_base_url`, `profile`, `oss_provider`) at top level or a `CODEX_IDENTITY_CONFIG_TABLES` table (`model_providers`, `profiles`).
+- **`ensureCodexLinks(dir)`** (idempotent create / repair, like `ensureClaudeLinks`): in an account that is already shared, a regular `history.jsonl` / `session_index.jsonl` (Codex replaced the link, fact 16) is repaired with `mergeLines` (shared with the Claude side): the lines the default file lacks are appended (whole-line comparison, order kept, bytes preserved), the account file is removed and the link re-created. A regular thread database in a shared account is a conflict and stays untouched. A whole-folder `skills` / `plugins/cache` link from an earlier version is replaced by per-child links; child links whose default target is gone are removed.
+- **When links are refreshed**: on add (shared), after the switch confirmation (8.1 step 4), by "Sync shared" and at the end of a conversion. There is nothing to mirror on the Codex side.
+- **Conversion** (`share` message; refused for the account effective in this window or the selected account with "Switch away from X before sharing it."; modal `share.confirmCodex`, which also warns that resuming another ChatGPT account's session may be rejected):
+  1. Busy check `codexAccountBusy(dir)`: `codexDaemonAlive(dir)`, or any `/proc/<pid>` whose `exe` basename is `codex` (a ` (deleted)` suffix is ignored) and whose `CODEX_HOME` in `environ` resolves to the directory (for `~/.codex`: unset, empty or equal). Environment alone is not enough, since shells and MCP servers inherit `CODEX_HOME`. Busy → warning "Codex is still running with account X; close it (including the editor's Codex panel sessions) and try again."
+  2. `migrateCodexToShared(dir, accountName)`: folders merged as on the Claude side; `history.jsonl` / `session_index.jsonl`: lines merged into the default file; `config.toml` / `AGENTS.md` / `hooks.json` / `.tmp/rollout-maintenance.lock`: when `~/.codex` lacks the file it is moved there and becomes the shared one (a `config.toml` with identity keys or tables stays in the account, not linked); identical → dropped, otherwise renamed to `<name>.independent-backup` (`config.toml` also stays when the default config is refused); thread databases: renamed with their `-wal` / `-shm` files to `<db>.independent-backup` (suffixes kept; `-2`, `-3`… when taken), then linked; `skills` / `plugins/cache` children merged; nested entries only inside a real account folder (a linked `.tmp` is never followed). Ends with `ensureCodexLinks`.
+  3. Summary "X is now shared with the default account. <summary>" or "Sharing X stopped: <reason>"; the view is refreshed.
+- **Independent creation**: `copyCodexIndependent` (8.2 step 3). "Sync shared" ignores independent accounts; there is no conversion back.
 
 ## 9. Refresh triggers
 
@@ -199,14 +229,17 @@ Panel `rename` message (with `dir` and `label`) → `panel.resolve('codex', dir)
 ```
 src/codex/
   codexPaths.ts      default dir, account dirs, scan, read-only auth.json (email, plan),
-                     seed config.toml copy, AGENTS.md link, delete checks (incl. daemon)
+                     seed config.toml copy (blockedConfigReason), delete checks (incl. daemon)
+  codexShare.ts      shared vs independent accounts: shared entries, isSharedCodexAccount,
+                     ensureCodexLinks, codexAccountBusy, migrateCodexToShared,
+                     copyCodexIndependent
   codexState.ts      atomic state file I/O, rc marker block detect/write/remove,
                      pre-check, self-check
   codexServer.ts     detect the editor kind, locate, verify and restart the WSL-side server
   codexStore.ts      codex.accounts / codex.ignoredDirs
   codexCommands.ts   codexPanelSource; enable / disable / switch / add / remove / terminal /
-                     restart / rename; handles Codex page messages
-labels.ts            LabelStore (codex.labels, legacy codex.defaultLabel migrated) and labelFor,
+                     restart / rename / share; handles Codex page messages
+labels.ts            LabelStore (codex.labels) and labelFor,
                      shared with Claude
 accountsPanel.ts     single instance, receives the { claude, codex } PanelSources; dispatches
                      messages by mode
@@ -216,7 +249,7 @@ webview/main.ts      top tab bar; the Codex page renders state.codex with its ow
 webview/i18n.ts      Webview i18n tables and t()
 ```
 
-Logic shared with Claude (path safety checks, shQuote, avatars, global rules links, etc.) is extracted into shared functions without changing Claude's behavior.
+Logic shared with Claude (path safety checks, shQuote, avatars, the link / merge helpers of claudeShare.ts, describeShareReport, etc.) is extracted into shared functions without changing Claude's behavior.
 
 ## 11. Implementation order and verification
 
@@ -230,9 +263,14 @@ Logic shared with Claude (path safety checks, shQuote, avatars, global rules lin
 
 1. Every Codex account switch restarts the WSL-side server: all WSL windows disconnect and each needs one "Reload Window" click; integrated terminals close. The restart is automatic only in Antigravity and VSCodium; in VS Code and unrecognized editors the user closes and reopens the windows.
 2. The state file is global and the last writer wins; other windows switch as well after the server restarts.
-3. Local data of each account (sessions, skills, prompts, memories, approval rules, etc.) is independent.
+3. Independent accounts keep all local data (sessions, skills, prompts, memories, approval rules, etc.) separate. Shared accounts share sessions, history, configuration, rules, skills and thread databases with `~/.codex`, but memories stay per account (fact 17), and so do logs, caches and the daemon state.
 4. Relies on two behaviors: Antigravity resolves the extension host environment through a login shell, and the server is started again automatically after it dies. Both come from the upstream VS Code implementation and must be re-verified after upgrades.
 5. `~/.profile` and `~/.bashrc` contain an extra marker block maintained by this extension; the disable command removes it.
 6. Only bash is supported as the login shell; zsh must be configured manually; fish is not supported.
 7. A leftover Codex instance on the Windows side is unrelated to this design and is not affected.
 8. When an rc marker block has been damaged by hand (start marker, no end marker), both the enable and the disable command refuse and ask for a manual fix, without changing the files.
+9. Resuming a session started by another ChatGPT account (organization) may be rejected by the server because its encrypted reasoning / compaction content is organization-bound (fact 18); high risk when switching between accounts of different organizations.
+10. Two accounts resuming the same session at the same time write to the same rollout file; avoid it.
+11. Shared accounts are only re-linked when adding, after the switch confirmation, by "Sync shared" and after a conversion; Codex replacing a link in between is repaired only then (jsonl files) or reported (other entries).
+12. Converting an independent account cannot be undone automatically; differing files are kept as `<name>.from-<account>` / `<name>.independent-backup`, and the account's thread databases are only kept as backups.
+13. MCP servers in the shared `config.toml` are shared, but MCP OAuth credentials are never linked or copied, so OAuth-based servers must be authorized in each account; for independent accounts, `env` values of MCP servers are copied in plain text with `config.toml`.

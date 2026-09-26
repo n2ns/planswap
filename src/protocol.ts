@@ -3,7 +3,7 @@ import type { Locale } from './i18n';
 
 export type AccountKind = 'default' | 'named' | 'external';
 export type PanelMode = 'claude' | 'codex';
-export type ToolId = 'openGlobalMd' | 'openSettings' | 'reloadWindow' | 'restartExtHost' | 'restartServer' | 'cliVersions' | 'syncRules' | 'updateCli' | 'openHelp' | 'openStar';
+export type ToolId = 'openGlobalMd' | 'openSettings' | 'reloadWindow' | 'restartExtHost' | 'restartServer' | 'cliVersions' | 'sync' | 'updateCli' | 'openHelp' | 'openStar';
 
 export interface AccountView {
   kind: AccountKind;
@@ -19,6 +19,8 @@ export interface AccountView {
   plan?: string;
   loggedIn: boolean;
   isCurrent: boolean;
+  // Named rows only: true = shared with the default account (links), false = independent; undefined for default / external
+  shared?: boolean;
 }
 
 export interface TabState {
@@ -55,7 +57,9 @@ export type FromWebview =
   | { type: 'switch'; mode: PanelMode; dir: string }
   | { type: 'terminal'; mode: PanelMode; dir: string }
   | { type: 'remove'; mode: PanelMode; dir: string }
-  | { type: 'add'; mode: PanelMode; name: string }
+  | { type: 'add'; mode: PanelMode; name: string; shared: boolean }
+  // Convert an independent named account into one shared with the default account
+  | { type: 'share'; mode: PanelMode; dir: string }
   | { type: 'rename'; mode: PanelMode; dir: string; label: string }
   | { type: 'reload'; mode: PanelMode }
   | { type: 'dismissBanner'; mode: PanelMode }

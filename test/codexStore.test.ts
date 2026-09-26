@@ -2,10 +2,9 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Memento } from 'vscode';
 import { CodexAccountStore } from '../src/codex/codexStore';
 import { LabelStore } from '../src/labels';
-import { makeTempHome, type TempHome } from './helpers';
+import { makeTempHome, MemoryMemento, type TempHome } from './helpers';
 
 let tmp: TempHome;
 let home: string;
@@ -15,22 +14,36 @@ before(() => {
 });
 after(() => tmp.restore());
 
-/** In-memory Memento stub */
-class MemoryMemento implements Memento {
-  readonly data = new Map<string, unknown>();
-  keys(): readonly string[] { return [...this.data.keys()]; }
-  get<T>(key: string): T | undefined;
-  get<T>(key: string, defaultValue: T): T;
-  get<T>(key: string, defaultValue?: T): T | undefined {
-    return this.data.has(key) ? (this.data.get(key) as T) : defaultValue;
-  }
-  async update(key: string, value: unknown): Promise<void> {
-    if (value === undefined) this.data.delete(key);
-    else this.data.set(key, value);
-  }
-}
-
 describe('CodexAccountStore', () => {
+  test('all() prepends ~/.codex even when CODEX_HOME is set; named() is sorted without a stored default entry', async () => {
+    const memento = new MemoryMemento();
+    const store = new CodexAccountStore(memento);
+    await memento.update('codex.accounts', [
+      { name: 'b', dir: path.join(home, '.codex-b') },
+      { name: 'default', dir: '/elsewhere' },
+      { name: 'a', dir: path.join(home, '.codex-a') },
+    ]);
+    process.env.CODEX_HOME = path.join(home, '.codex-a');
+    try {
+      assert.deepEqual(store.all().map((a) => a.name), ['default', 'a', 'b']);
+      assert.equal(store.all()[0].dir, path.join(home, '.codex'));
+      assert.equal(store.findByDir(path.join(home, '.codex-b') + '/')?.name, 'b');
+    } finally {
+      delete process.env.CODEX_HOME;
+    }
+  });
+
+  test('add replaces an entry with the same name and clears the directory from the ignore list', async () => {
+    const memento = new MemoryMemento();
+    const store = new CodexAccountStore(memento);
+    const dir = path.join(home, '.codex-a');
+    await memento.update('codex.ignoredDirs', [dir + '/', '/other']);
+    await store.add({ name: 'a', dir: '/old' });
+    await store.add({ name: 'a', dir });
+    assert.deepEqual(store.named(), [{ name: 'a', dir }]);
+    assert.deepEqual(memento.get('codex.ignoredDirs'), ['/other']);
+  });
+
   test('remove keeps the directory ignored; unignore lets syncWithDisk register it again', async () => {
     const dir = path.join(home, '.codex-a');
     fs.mkdirSync(dir);
@@ -54,13 +67,14 @@ describe('CodexAccountStore', () => {
     fs.mkdirSync(dir);
     const memento = new MemoryMemento();
     const store = new CodexAccountStore(memento);
-    const labels = new LabelStore(memento, 'codex.labels', 'codex.defaultLabel');
-    await labels.set('default', 'work');
+    const labels = new LabelStore(memento, 'codex.labels');
+    const a = { name: 'a', dir: path.join(home, 'elsewhere-a') };
+    await store.add(a);
+    await labels.set('a', 'work');
     await store.syncWithDisk(labels);
-    assert.deepEqual(store.named(), []);
-    await labels.set('default', undefined);
+    assert.deepEqual(store.named(), [a]);
+    await labels.set('a', undefined);
     await store.syncWithDisk(labels);
-    assert.deepEqual(store.named(), [{ name: 'work', dir }]);
+    assert.deepEqual(store.named(), [a, { name: 'work', dir }]);
     fs.rmSync(dir, { recursive: true });
-  });
-});
+  });});

@@ -7,6 +7,7 @@ import { currentDir, isExplicitConfigDir } from './claudeSettings';
 import type { AccountStore } from './accounts';
 import { EXTERNAL_NAME, labelFor, type LabelStore } from './labels';
 import type { AccountView, FromWebview, PanelMode, PanelState, TabState, ToWebview } from './protocol';
+import { isSharedClaudeAccount } from './claudeShare';
 import { getLocale } from './i18n';
 
 export const VIEW_ID = 'aiSwitcher.accounts';
@@ -36,6 +37,7 @@ export function claudePanelSource(store: AccountStore, labels: LabelStore): Pane
       dirLabel: tildify(a.dir),
       ...readAccountInfo(a.dir, isExplicitConfigDir(a.dir)),
       isCurrent: samePath(a.dir, cur),
+      shared: a.name === DEFAULT_NAME ? undefined : isSharedClaudeAccount(a.dir),
     }));
     if (!rows.some((r) => r.isCurrent)) {
       rows.push({

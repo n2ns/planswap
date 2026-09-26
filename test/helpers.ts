@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { Memento } from 'vscode';
 
 // Record the real home directory at module load (before any `before` hook) for later assertions
 const REAL_HOME = os.homedir();
@@ -46,3 +47,18 @@ export function assertTempHome(expected?: string): void {
 
 export const read = (f: string): string => fs.readFileSync(f, 'utf8');
 export const mode = (f: string): string => (fs.statSync(f).mode & 0o777).toString(8);
+
+/** In-memory Memento stub */
+export class MemoryMemento implements Memento {
+  readonly data = new Map<string, unknown>();
+  keys(): readonly string[] { return [...this.data.keys()]; }
+  get<T>(key: string): T | undefined;
+  get<T>(key: string, defaultValue: T): T;
+  get<T>(key: string, defaultValue?: T): T | undefined {
+    return this.data.has(key) ? (this.data.get(key) as T) : defaultValue;
+  }
+  async update(key: string, value: unknown): Promise<void> {
+    if (value === undefined) this.data.delete(key);
+    else this.data.set(key, value);
+  }
+}

@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
 import {
   checkCodexSafeToDelete, codexAccountDir, codexDaemonAlive, codexDefaultDir, codexLoggedIn, copyCodexSeed,
-  decodeJwtPayload, deleteCodexDir, ensureCodexDir, formatCodexPlan, linkGlobalRules, readCodexAccountInfo, scanCodexDirs,
+  decodeJwtPayload, deleteCodexDir, ensureCodexDir, formatCodexPlan, readCodexAccountInfo, scanCodexDirs,
 } from '../src/codex/codexPaths';
 import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
 
@@ -275,44 +275,6 @@ describe('scanCodexDirs / checkCodexSafeToDelete / codexDaemonAlive / deleteCode
     assert.ok(fs.existsSync(path.join(home, '.codex-a')));
     await deleteCodexDir(path.join(home, '.codex-b_1'));
     assert.ok(!fs.existsSync(path.join(home, '.codex-b_1')));
-  });
-});
-
-describe('linkGlobalRules (AGENTS.md)', () => {
-  const file = 'AGENTS.md';
-  let realDef: string;
-  before(() => {
-    // Above, ~/.codex was made a link to .codex-real; the link target here is ~/.codex/AGENTS.md (inside .codex-real once resolved)
-    realDef = def;
-  });
-  const mk = (n: string): string => {
-    const d = codexAccountDir('rules-' + n);
-    fs.mkdirSync(d, { recursive: true });
-    return d;
-  };
-  test('default file missing → created with 0600 → linked', () => {
-    const defFile = path.join(realDef, file);
-    assert.ok(!fs.existsSync(defFile));
-    const a = mk('a');
-    assert.equal(linkGlobalRules(a), 'linked');
-    assert.equal(mode(defFile), '600');
-    assert.ok(fs.lstatSync(path.join(a, file)).isSymbolicLink());
-    assert.equal(fs.readlinkSync(path.join(a, file)), defFile);
-  });
-  test('already-linked / kept-own-file / skipped-default', () => {
-    assert.equal(linkGlobalRules(mk('a')), 'already-linked');
-    const d = mk('d');
-    fs.symlinkSync(path.join('..', '.codex', file), path.join(d, file));
-    assert.equal(linkGlobalRules(d), 'already-linked');
-    const b = mk('b');
-    fs.writeFileSync(path.join(b, file), 'own');
-    assert.equal(linkGlobalRules(b), 'kept-own-file');
-    assert.equal(read(path.join(b, file)), 'own');
-    const c = mk('c');
-    fs.symlinkSync(path.join(b, file), path.join(c, file));
-    assert.equal(linkGlobalRules(c), 'kept-own-file');
-    assert.equal(linkGlobalRules(realDef), 'skipped-default');
-    assert.equal(linkGlobalRules(path.join(home, '.codex-real')), 'skipped-default');
   });
 });
 

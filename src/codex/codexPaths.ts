@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { type RulesLinkResult, linkRulesFile, samePath, sameRealPath } from '../paths';
+import { samePath, sameRealPath } from '../paths';
 import { t } from '../i18n';
 
 export const CODEX_DEFAULT_NAME = 'default';
@@ -9,7 +9,7 @@ export const CODEX_DIR_BASENAME_RE = /^\.codex-[A-Za-z0-9_-]+$/;
 
 export interface CodexAccount { name: string; dir: string }
 
-// AGENTS.md is not copied; linkGlobalRules links it to the default account's file
+// Seed files copied into an independent account (AGENTS.md and the rest are handled by codexShare.copyCodexIndependent)
 const SEED_FILES = ['config.toml'];
 // Top-level keys in the seed config that must not be carried into a new account dir (design 8.2)
 const BLOCKED_TOP_KEYS = ['forced_login_method', 'forced_chatgpt_workspace_id', 'sqlite_home', 'log_dir', 'model_provider'];
@@ -114,12 +114,6 @@ export function ensureCodexDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
-export type { RulesLinkResult };
-
-// Links the default account's AGENTS.md into the account dir (behavior: see paths.linkRulesFile)
-export function linkGlobalRules(dir: string): RulesLinkResult {
-  return linkRulesFile(dir, codexDefaultDir(), 'AGENTS.md');
-}
 
 export interface CopyResult { copied: string[]; skipped: Array<{ file: string; reason: string }> }
 
@@ -187,7 +181,8 @@ function scanValue(s: string, st: ValueState): void {
 // header whose first segment is blocked, or a top-level key (plain, quoted, dotted or inline table) whose first
 // segment is blocked; keys after any other table header are not top-level. Lines inside a multi-line value
 // (array, inline table, """ or ''' string) are skipped, so they are never read as keys or headers.
-function blockedConfigReason(text: string): string | undefined {
+// roots: the blocked first segments (default: the seed-copy list)
+export function blockedConfigReason(text: string, roots: readonly string[] = BLOCKED_ROOTS): string | undefined {
   let topLevel = true;
   const st: ValueState = { depth: 0 };
   for (const raw of text.split(/\r?\n/)) {
@@ -201,7 +196,7 @@ function blockedConfigReason(text: string): string | undefined {
       // [table] or [[array of tables]]
       const header = parseTomlKey(line.slice(line.startsWith('[[') ? 2 : 1));
       if (!header || !header.rest.startsWith(']')) continue;
-      if (BLOCKED_ROOTS.includes(header.segments[0])) {
+      if (roots.includes(header.segments[0])) {
         return t('codex.seed.hasSection', { section: `[${header.segments.join('.')}]` });
       }
       // Keys after any table header are not top-level
@@ -210,7 +205,7 @@ function blockedConfigReason(text: string): string | undefined {
     }
     const key = parseTomlKey(line);
     if (!key || !key.rest.startsWith('=')) continue;
-    if (topLevel && BLOCKED_ROOTS.includes(key.segments[0])) {
+    if (topLevel && roots.includes(key.segments[0])) {
       return t('codex.seed.hasTopKey', { key: key.segments[0] });
     }
     scanValue(key.rest.slice(1), st);

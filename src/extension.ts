@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 import { AccountStore } from './accounts';
 import { AccountsPanel, VIEW_ID, claudePanelSource, type PanelSource } from './accountsPanel';
-import { LabelStore } from './labels';
+import { LabelStore, labelFor } from './labels';
+import { ensureCodexLinks, isSharedCodexAccount } from './codex/codexShare';
 import { StatusBar } from './statusBar';
 import { registerCommands } from './commands';
 import { affectsSetting } from './claudeSettings';
@@ -19,9 +21,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     return;
   }
   const store = new AccountStore(ctx.globalState);
-  const claudeLabels = new LabelStore(ctx.globalState, 'claude.labels', 'claude.defaultLabel');
+  const claudeLabels = new LabelStore(ctx.globalState, 'claude.labels');
   await store.syncWithDisk(claudeLabels);
-  const codexLabels = new LabelStore(ctx.globalState, 'codex.labels', 'codex.defaultLabel');
+  const codexLabels = new LabelStore(ctx.globalState, 'codex.labels');
   const statusBar = new StatusBar(store, claudeLabels);
 
   // A Codex init failure is only logged and does not affect Claude: the Codex tab renders as "not enabled, no accounts"
@@ -44,6 +46,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     postVersions: (items) => panel.post({ type: 'versions', items }),
     claudeDirs: () => store.named().map((a) => a.dir),
     codexDirs: codex ? () => codex.store.named().map((a) => a.dir) : undefined,
+    codexShareOps: codex ? { isShared: isSharedCodexAccount, refresh: ensureCodexLinks } : undefined,
+    labelOf: (mode, dir) => {
+      const account = mode === 'claude' ? store.findByDir(dir) : codex?.store.findByDir(dir);
+      return account ? labelFor(account.name, mode === 'claude' ? claudeLabels : codexLabels) : path.basename(dir);
+    },
   };
 
   const panel = new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState);

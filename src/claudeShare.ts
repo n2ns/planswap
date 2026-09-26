@@ -1,0 +1,548 @@
+// Shared vs independent Claude accounts: a shared account links everything except its login identity to the
+// default account's directory. No vscode import.
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { t } from './i18n';
+import { copySettingsStripped, defaultDir, samePath, sameRealPath, syncMcpServers } from './paths';
+
+// Whole-entry links (kind: file needs an empty-file default, dir needs an empty dir)
+export const CLAUDE_SHARED_ENTRIES: ReadonlyArray<{ name: string; kind: 'file' | 'dir' }> = [
+  { name: 'settings.json', kind: 'file' },
+  { name: 'CLAUDE.md', kind: 'file' },
+  { name: 'history.jsonl', kind: 'file' },
+  { name: 'projects', kind: 'dir' }, { name: 'file-history', kind: 'dir' }, { name: 'todos', kind: 'dir' },
+  { name: 'session-env', kind: 'dir' }, { name: 'shell-snapshots', kind: 'dir' }, { name: 'sessions', kind: 'dir' },
+  { name: 'tasks', kind: 'dir' }, { name: 'uploads', kind: 'dir' }, { name: 'agents', kind: 'dir' },
+  { name: 'commands', kind: 'dir' }, { name: 'output-styles', kind: 'dir' }, { name: 'hooks', kind: 'dir' },
+  { name: 'rules', kind: 'dir' }, { name: 'ide', kind: 'dir' },
+];
+// Dirs shared per child: every child of the default dir's folder is linked, except these names
+export const CLAUDE_CHILD_SHARED_DIRS = ['skills', 'plugins'] as const;
+export const CLAUDE_CHILD_EXCLUDES = ['synced', '.trash'] as const;   // per-account cloud-synced buckets
+// Keys that must never be shared through settings.json (identity); linking settings.json is refused when the
+// default settings.json has any of them (top-level or inside env)
+export const CLAUDE_IDENTITY_SETTING_KEYS = {
+  top: ['apiKeyHelper', 'forceLoginMethod', 'forceLoginOrgUUID'],
+  env: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR'],
+};
+
+// Per-project keys of .claude.json mirrored from the default account
+const PROJECT_KEYS = [
+  'allowedTools', 'mcpServers', 'enabledMcpjsonServers', 'disabledMcpjsonServers', 'mcpContextUris',
+  'hasTrustDialogAccepted', 'hasClaudeMdExternalIncludesApproved', 'hasClaudeMdExternalIncludesWarningShown',
+];
+// Folders copied once when an independent account is created
+const INDEPENDENT_COPY_DIRS = ['agents', 'commands', 'output-styles', 'hooks', 'rules'];
+const EMPTY_CONTENT: Record<string, string> = { 'settings.json': '{}\n' };
+
+export interface ShareReport {
+  linked: string[];     // entry names (children as 'skills/<child>') newly linked
+  created: string[];    // entries created empty in the default dir
+  conflicts: string[];  // entries the account has as a real file/dir or a link elsewhere; left untouched
+  refused: string[];    // entries refused for safety (e.g. 'settings.json' when the default has identity keys)
+}
+
+export interface MigrateReport extends ShareReport {
+  moved: number;          // files moved into the default dir
+  duplicates: number;     // identical files dropped from the account
+  keptBoth: string[];     // relative paths of account copies moved next to the default file as '<name>.from-<account>'
+  backups: string[];      // account-only files replaced by a link, kept as '<entry>.independent-backup' in the account dir
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+export function lstatOrUndefined(p: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(p);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
+}
+
+export function realOrResolved(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+// Whether link is a symlink pointing at target (relative links resolved against the link's folder)
+export function linksTo(link: string, target: string): boolean {
+  const st = lstatOrUndefined(link);
+  if (!st?.isSymbolicLink()) return false;
+  const to = path.resolve(path.dirname(link), fs.readlinkSync(link));
+  return to === path.resolve(target) || (fs.existsSync(link) && sameRealPath(link, target));
+}
+
+function isDefault(dir: string): boolean {
+  return sameRealPath(dir, defaultDir());
+}
+
+export function emptyReport(): ShareReport {
+  return { linked: [], created: [], conflicts: [], refused: [] };
+}
+
+// Whether the default settings.json can be shared: missing, or a JSON object without identity keys
+function settingsShareable(file: string): boolean {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    return false;
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (!isPlainObject(data)) return false;
+  if (CLAUDE_IDENTITY_SETTING_KEYS.top.some((k) => Object.hasOwn(data, k))) return false;
+  const env = data.env;
+  return !(isPlainObject(env) && CLAUDE_IDENTITY_SETTING_KEYS.env.some((k) => Object.hasOwn(env, k)));
+}
+
+// Creates a missing default entry empty; returns true when created
+function ensureDefaultEntry(target: string, kind: 'file' | 'dir'): boolean {
+  if (lstatOrUndefined(target)) return false;
+  if (kind === 'dir') fs.mkdirSync(target, { mode: 0o700 });
+  else fs.writeFileSync(target, EMPTY_CONTENT[path.basename(target)] ?? '', { mode: 0o600, flag: 'wx' });
+  return true;
+}
+
+// Links link → target; 'linked' / 'ok' (already linked) / 'conflict' (real entry or link elsewhere, untouched)
+export function linkEntry(link: string, target: string): 'linked' | 'ok' | 'conflict' {
+  const st = lstatOrUndefined(link);
+  if (!st) {
+    fs.symlinkSync(target, link);
+    return 'linked';
+  }
+  return linksTo(link, target) ? 'ok' : 'conflict';
+}
+
+export function record(report: ShareReport, name: string, result: 'linked' | 'ok' | 'conflict'): void {
+  if (result === 'linked') report.linked.push(name);
+  else if (result === 'conflict') report.conflicts.push(name);
+}
+
+// Appends the lines of src that dst lacks (whole-line comparison, order kept), then removes src. latin1 keeps the
+// bytes unchanged. Returns the number of appended lines.
+export function mergeLines(src: string, dst: string): number {
+  const existing = lstatOrUndefined(dst) ? fs.readFileSync(dst, 'latin1') : undefined;
+  const have = new Set((existing ?? '').split('\n'));
+  const missing: string[] = [];
+  for (const line of fs.readFileSync(src, 'latin1').split('\n')) {
+    if (line === '' || have.has(line)) continue;
+    have.add(line);
+    missing.push(line);
+  }
+  if (missing.length > 0) {
+    const sep = existing && !existing.endsWith('\n') ? '\n' : '';
+    fs.appendFileSync(dst, sep + missing.join('\n') + '\n', { encoding: 'latin1', mode: 0o600 });
+  } else if (existing === undefined) {
+    fs.writeFileSync(dst, '', { mode: 0o600, flag: 'wx' });
+  }
+  fs.unlinkSync(src);
+  return missing.length;
+}
+
+/** Creates/repairs every link of a shared account (idempotent). Never touches the default dir's existing content;
+ *  in a shared account a real history.jsonl (replaced by `claude project purge`) is merged back and relinked.
+ *  Also removes links in skills/ or plugins/ whose default child no longer exists. dir === default → empty report. */
+export function ensureClaudeLinks(dir: string): ShareReport {
+  const report = emptyReport();
+  if (isDefault(dir)) return report;
+  const def = defaultDir();
+  const acc = path.resolve(dir);
+  fs.mkdirSync(def, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(acc, { recursive: true, mode: 0o700 });
+
+  const shared = isSharedClaudeAccount(dir);
+  for (const { name, kind } of CLAUDE_SHARED_ENTRIES) {
+    const target = path.join(def, name);
+    if (name === 'settings.json' && !settingsShareable(target)) {
+      report.refused.push(name);
+      continue;
+    }
+    if (ensureDefaultEntry(target, kind)) report.created.push(name);
+    const link = path.join(acc, name);
+    // `claude project purge` rewrites history.jsonl by rename, replacing the link: merge the lines back and relink
+    if (shared && name === 'history.jsonl' && lstatOrUndefined(link)?.isFile()) mergeLines(link, target);
+    record(report, name, linkEntry(link, target));
+  }
+
+  for (const name of CLAUDE_CHILD_SHARED_DIRS) {
+    const defFolder = path.join(def, name);
+    if (ensureDefaultEntry(defFolder, 'dir')) report.created.push(name);
+    const accFolder = path.join(acc, name);
+    const st = lstatOrUndefined(accFolder);
+    if (st?.isSymbolicLink() && linksTo(accFolder, defFolder)) {
+      // Whole-folder link from an earlier version: replace it by a real folder with per-child links
+      fs.unlinkSync(accFolder);
+      fs.mkdirSync(accFolder, { mode: 0o700 });
+    } else if (!st) {
+      fs.mkdirSync(accFolder, { mode: 0o700 });
+    } else if (!st.isDirectory()) {
+      report.conflicts.push(name);
+      continue;
+    }
+    const excluded = new Set<string>(CLAUDE_CHILD_EXCLUDES);
+    for (const child of fs.readdirSync(defFolder)) {
+      if (excluded.has(child)) continue;
+      record(report, `${name}/${child}`, linkEntry(path.join(accFolder, child), path.join(defFolder, child)));
+    }
+    // Remove links into the default folder whose target no longer exists
+    for (const child of fs.readdirSync(accFolder)) {
+      const link = path.join(accFolder, child);
+      if (!lstatOrUndefined(link)?.isSymbolicLink()) continue;
+      const to = path.resolve(accFolder, fs.readlinkSync(link));
+      if (path.dirname(to) === defFolder && !lstatOrUndefined(to)) fs.unlinkSync(link);
+    }
+  }
+  return report;
+}
+
+// Reads a JSON object; undefined when missing; throws when present but not a JSON object
+function readSourceJson(file: string): Record<string, unknown> {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw e;
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = undefined;
+  }
+  if (!isPlainObject(data)) throw new Error(t('share.badSource', { file }));
+  return data;
+}
+
+/** Mirrors shareable keys of the default account's info file into <dir>/.claude.json (see the contract). */
+export function mirrorClaudeJson(fromJson: string, dir: string): { changed: string[] } {
+  const changed: string[] = [];
+  if (isDefault(dir)) return { changed };
+  const source = readSourceJson(fromJson);
+
+  const file = path.join(path.resolve(dir), '.claude.json');
+  let real = file;
+  let before: string | undefined;
+  let mode = 0o600;
+  if (fs.existsSync(file)) {
+    real = fs.realpathSync(file);
+    before = fs.readFileSync(real, 'utf8');
+    mode = fs.statSync(real).mode & 0o777;
+  }
+  let data: unknown = {};
+  if (before !== undefined) {
+    try {
+      data = JSON.parse(before);
+    } catch {
+      data = undefined;
+    }
+  }
+  if (!isPlainObject(data)) throw new Error(t('mcp.badTarget', { file: real }));
+
+  const mcp = isPlainObject(source.mcpServers) ? source.mcpServers : {};
+  const currentMcp = data.mcpServers === undefined ? {} : data.mcpServers;
+  if (!isDeepStrictEqual(currentMcp, mcp)) {
+    data.mcpServers = mcp;
+    changed.push('mcpServers');
+  }
+
+  const srcProjects = isPlainObject(source.projects) ? source.projects : {};
+  for (const [p, srcProj] of Object.entries(srcProjects)) {
+    if (!isPlainObject(srcProj)) continue;
+    if (!isPlainObject(data.projects)) data.projects = {};
+    const projects = data.projects as Record<string, unknown>;
+    const proj = isPlainObject(projects[p]) ? (projects[p] as Record<string, unknown>) : {};
+    let differs = !isPlainObject(projects[p]);
+    for (const k of PROJECT_KEYS) {
+      if (!Object.hasOwn(srcProj, k) || isDeepStrictEqual(proj[k], srcProj[k])) continue;
+      proj[k] = srcProj[k];
+      differs = true;
+    }
+    if (differs) {
+      projects[p] = proj;
+      changed.push(`projects:${p}`);
+    }
+  }
+  if (changed.length === 0) return { changed };
+
+  const tmp = `${real}.planswap-${process.pid}.tmp`;
+  // A temporary file left by an interrupted run is replaced
+  fs.rmSync(tmp, { force: true });
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode, flag: 'wx' });
+    // Refuse to overwrite a write the CLI made in the meantime
+    const now = fs.existsSync(real) ? fs.readFileSync(real, 'utf8') : undefined;
+    if (now !== before) throw new Error(t('mcp.changed', { file: real }));
+    fs.renameSync(tmp, real);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  return { changed };
+}
+
+/** true when a Claude process is running with this config dir: a <dir>/sessions/*.json whose pid is alive and whose
+ *  /proc/<pid>/environ has CLAUDE_CONFIG_DIR=<dir> (for the default dir: unset or the default). procRoot is for tests. */
+export function claudeAccountBusy(dir: string, procRoot = '/proc'): boolean {
+  const sessions = path.join(path.resolve(dir), 'sessions');
+  let files: string[];
+  try {
+    files = fs.readdirSync(sessions).filter((f) => f.endsWith('.json'));
+  } catch {
+    return false;
+  }
+  const def = defaultDir();
+  const forDefault = sameRealPath(dir, def);
+  for (const f of files) {
+    let pid: unknown;
+    try {
+      const data: unknown = JSON.parse(fs.readFileSync(path.join(sessions, f), 'utf8'));
+      pid = isPlainObject(data) ? data.pid : undefined;
+    } catch {
+      continue;
+    }
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue;
+    let environ: string;
+    try {
+      environ = fs.readFileSync(path.join(procRoot, String(pid), 'environ'), 'utf8');
+    } catch {
+      // Not running, or another user's process
+      continue;
+    }
+    const entry = environ.split('\0').find((e) => e.startsWith('CLAUDE_CONFIG_DIR='));
+    const value = entry?.slice('CLAUDE_CONFIG_DIR='.length).trim();
+    if (forDefault ? !value || samePath(value, def) || sameRealPath(value, def) : !!value && (samePath(value, dir) || sameRealPath(value, dir))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Moves a file, link or folder without following symlinks; falls back to copy + delete across file systems
+export function moveEntry(src: string, dst: string): void {
+  try {
+    fs.renameSync(src, dst);
+    return;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+  }
+  const st = fs.lstatSync(src);
+  if (st.isSymbolicLink()) {
+    fs.symlinkSync(fs.readlinkSync(src), dst);
+    fs.unlinkSync(src);
+  } else if (st.isDirectory()) {
+    fs.cpSync(src, dst, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true, preserveTimestamps: true });
+    fs.rmSync(src, { recursive: true });
+  } else {
+    fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(dst, st.mode & 0o777);
+    fs.utimesSync(dst, st.atime, st.mtime);
+    fs.unlinkSync(src);
+  }
+}
+
+// First free name among base, base-2, base-3 …
+export function freeName(base: string): string {
+  if (!lstatOrUndefined(base)) return base;
+  for (let i = 2; ; i++) if (!lstatOrUndefined(`${base}-${i}`)) return `${base}-${i}`;
+}
+
+export function sameContent(a: string, b: string, sa: fs.Stats, sb: fs.Stats): boolean {
+  if (sa.isSymbolicLink() || sb.isSymbolicLink()) {
+    return sa.isSymbolicLink() && sb.isSymbolicLink() && fs.readlinkSync(a) === fs.readlinkSync(b);
+  }
+  return sa.isFile() && sb.isFile() && sa.size === sb.size && fs.readFileSync(a).equals(fs.readFileSync(b));
+}
+
+export interface MergeCtx { report: MigrateReport; account: string }
+
+// Merges the account entry src into the default entry dst (rel: dst relative to the default dir, for the report)
+export function mergeEntry(src: string, dst: string, rel: string, ctx: MergeCtx): void {
+  const ss = fs.lstatSync(src);
+  const ds = lstatOrUndefined(dst);
+  if (ss.isDirectory()) {
+    if (!ds) fs.mkdirSync(dst, { mode: ss.mode & 0o777 });
+    if (!ds || ds.isDirectory()) {
+      for (const child of fs.readdirSync(src)) mergeEntry(path.join(src, child), path.join(dst, child), path.join(rel, child), ctx);
+      removeIfEmpty(src);
+      return;
+    }
+  } else if (!ds) {
+    moveEntry(src, dst);
+    ctx.report.moved++;
+    return;
+  } else if (sameContent(src, dst, ss, ds)) {
+    fs.unlinkSync(src);
+    ctx.report.duplicates++;
+    return;
+  }
+  if (!ss.isDirectory() && !ss.isFile() && !ss.isSymbolicLink()) return;   // sockets, fifos: left in place
+  const kept = freeName(`${dst}.from-${ctx.account}`);
+  moveEntry(src, kept);
+  ctx.report.keptBoth.push(path.join(path.dirname(rel), path.basename(kept)));
+}
+
+// The default folder to merge into (a link to a folder is followed; created 0700 when missing); undefined when not a folder
+export function defaultFolder(p: string): string | undefined {
+  if (!lstatOrUndefined(p)) {
+    fs.mkdirSync(p, { mode: 0o700 });
+    return p;
+  }
+  return fs.existsSync(p) && fs.statSync(p).isDirectory() ? fs.realpathSync(p) : undefined;
+}
+
+function removeIfEmpty(dir: string): void {
+  try {
+    fs.rmdirSync(dir);
+  } catch (e) {
+    // Something could not be merged (e.g. a socket): leave the folder, ensureClaudeLinks reports a conflict
+    if ((e as NodeJS.ErrnoException).code !== 'ENOTEMPTY' && (e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  }
+}
+
+function appendHistory(src: string, dst: string): void {
+  const add = fs.readFileSync(src);
+  if (add.length > 0) {
+    const existing = lstatOrUndefined(dst) ? fs.readFileSync(dst) : Buffer.alloc(0);
+    const parts: Buffer[] = [];
+    if (existing.length > 0 && existing[existing.length - 1] !== 0x0a) parts.push(Buffer.from('\n'));
+    parts.push(add);
+    if (add[add.length - 1] !== 0x0a) parts.push(Buffer.from('\n'));
+    fs.appendFileSync(dst, Buffer.concat(parts), { mode: 0o600 });
+  } else if (!lstatOrUndefined(dst)) {
+    fs.writeFileSync(dst, '', { mode: 0o600, flag: 'wx' });
+  }
+  fs.unlinkSync(src);
+}
+
+/** Converts an independent account into a shared one (see the contract); ends with ensureClaudeLinks(dir).
+ *  Throws t('share.busy') when claudeAccountBusy(dir, procRoot). */
+export function migrateClaudeToShared(dir: string, accountName: string, procRoot = '/proc'): MigrateReport {
+  const report: MigrateReport = { ...emptyReport(), moved: 0, duplicates: 0, keptBoth: [], backups: [] };
+  if (isDefault(dir)) return report;
+  if (claudeAccountBusy(dir, procRoot)) throw new Error(t('share.busy', { name: accountName }));
+  const def = defaultDir();
+  const acc = path.resolve(dir);
+  fs.mkdirSync(def, { recursive: true, mode: 0o700 });
+  const ctx: MergeCtx = { report, account: accountName };
+
+  for (const { name, kind } of CLAUDE_SHARED_ENTRIES) {
+    const src = path.join(acc, name);
+    const st = lstatOrUndefined(src);
+    if (!st || st.isSymbolicLink()) continue;   // missing or already a link (a link elsewhere stays a conflict)
+    const dst = path.join(def, name);
+    if (kind === 'dir') {
+      if (!st.isDirectory()) continue;
+      const into = defaultFolder(dst);
+      if (into) mergeEntry(src, into, name, ctx);
+    } else if (st.isFile()) {
+      if (name === 'history.jsonl') {
+        appendHistory(src, dst);
+        report.moved++;
+      } else {
+        // settings.json stays when it cannot be linked (default has identity keys), so the account keeps its settings
+        if (name === 'settings.json' && !settingsShareable(dst)) continue;
+        const ds = lstatOrUndefined(dst);
+        if (!ds) {
+          // The default has none: the account's file becomes the shared one, unless it carries identity keys
+          if (name === 'settings.json' && !settingsShareable(src)) continue;
+          moveEntry(src, dst);
+          report.moved++;
+        } else if (sameContent(src, dst, st, fs.statSync(dst))) {
+          fs.unlinkSync(src);
+          report.duplicates++;
+        } else {
+          const backup = freeName(`${src}.independent-backup`);
+          fs.renameSync(src, backup);
+          report.backups.push(path.basename(backup));
+        }
+      }
+    }
+  }
+
+  const excluded = new Set<string>(CLAUDE_CHILD_EXCLUDES);
+  for (const name of CLAUDE_CHILD_SHARED_DIRS) {
+    const accFolder = path.join(acc, name);
+    if (!lstatOrUndefined(accFolder)?.isDirectory()) continue;
+    const defFolder = path.join(def, name);
+    const into = defaultFolder(defFolder);
+    if (!into) continue;
+    for (const child of fs.readdirSync(accFolder)) {
+      if (excluded.has(child)) continue;
+      const src = path.join(accFolder, child);
+      if (linksTo(src, path.join(defFolder, child))) continue;
+      mergeEntry(src, path.join(into, child), `${name}/${child}`, ctx);
+    }
+  }
+
+  const links = ensureClaudeLinks(dir);
+  report.linked.push(...links.linked);
+  report.created.push(...links.created);
+  report.conflicts.push(...links.conflicts);
+  report.refused.push(...links.refused);
+  return report;
+}
+
+// Copies src to dst without following symlinks inside and without overwriting
+export function copyTree(src: string, dst: string): void {
+  fs.cpSync(src, dst, { recursive: true, errorOnExist: false, force: false, verbatimSymlinks: true });
+}
+
+/** Independent creation: copies settings.json (stripped), CLAUDE.md, the config folders and the non-excluded
+ *  skills/ children from the default dir, and merges MCP servers. Never overwrites. */
+export function copyClaudeIndependent(fromJson: string, dir: string): { copied: string[] } {
+  const copied: string[] = [];
+  if (isDefault(dir)) return { copied };
+  const def = defaultDir();
+  const acc = path.resolve(dir);
+  fs.mkdirSync(acc, { recursive: true, mode: 0o700 });
+
+  if (copySettingsStripped(def, acc)) copied.push('settings.json');
+  const rules = path.join(def, 'CLAUDE.md');
+  if (fs.existsSync(rules) && fs.statSync(rules).isFile() && !lstatOrUndefined(path.join(acc, 'CLAUDE.md'))) {
+    fs.copyFileSync(rules, path.join(acc, 'CLAUDE.md'), fs.constants.COPYFILE_EXCL);
+    copied.push('CLAUDE.md');
+  }
+  for (const name of INDEPENDENT_COPY_DIRS) {
+    const src = path.join(def, name);
+    // A top-level folder that is itself a link (e.g. into dotfiles) is copied from its real location
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory() || lstatOrUndefined(path.join(acc, name))) continue;
+    copyTree(fs.realpathSync(src), path.join(acc, name));
+    copied.push(name);
+  }
+  const skills = path.join(def, 'skills');
+  if (fs.existsSync(skills) && fs.statSync(skills).isDirectory()) {
+    const excluded = new Set<string>(CLAUDE_CHILD_EXCLUDES);
+    for (const child of fs.readdirSync(skills)) {
+      if (excluded.has(child)) continue;
+      const to = path.join(acc, 'skills', child);
+      if (lstatOrUndefined(to)) continue;
+      fs.mkdirSync(path.join(acc, 'skills'), { recursive: true, mode: 0o700 });
+      copyTree(path.join(skills, child), to);
+      copied.push(`skills/${child}`);
+    }
+  }
+  if (syncMcpServers(fromJson, acc).added.length > 0) copied.push('mcpServers');
+  return { copied };
+}
+
+/** Shared iff <dir>/projects is a symlink resolving to the default dir's projects. The default dir → false. */
+export function isSharedClaudeAccount(dir: string): boolean {
+  if (isDefault(dir)) return false;
+  const link = path.join(path.resolve(dir), 'projects');
+  if (!lstatOrUndefined(link)?.isSymbolicLink()) return false;
+  const target = path.join(defaultDir(), 'projects');
+  return fs.existsSync(link) && fs.existsSync(target) && realOrResolved(link) === realOrResolved(target);
+}

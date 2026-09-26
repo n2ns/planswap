@@ -11,6 +11,7 @@ tsconfig.json
 docs/**
 AGENTS.md
 CLAUDE.md
+TODO.md
 .vscode/**
 .github/**
 resources/account-switcher-banner.webp

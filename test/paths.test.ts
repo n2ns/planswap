@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import { setLocale } from '../src/i18n';
 import {
   accountDir, checkSafeToDelete, claudeJsonPath, copySettingsStripped, defaultDir, deleteAccountDir,
-  ensureAccountDir, formatClaudePlan, linkGlobalRules, readAccountInfo, scanAccountDirs,
+  ensureAccountDir, formatClaudePlan, readAccountInfo, samePath, sameRealPath, scanAccountDirs,
+  syncMcpServers,
 } from '../src/paths';
 import { assertTempHome, makeTempHome, mode, read, type TempHome } from './helpers';
 
@@ -44,6 +45,33 @@ describe('formatClaudePlan', () => {
   test('both empty → undefined', () => {
     assert.equal(formatClaudePlan(undefined, undefined), undefined);
     assert.equal(formatClaudePlan('', ''), undefined);
+  });
+});
+
+describe('samePath / sameRealPath', () => {
+  test('samePath normalizes trailing slashes and . / .. but does not resolve symlinks', () => {
+    const link = path.join(home, 'same-link');
+    fs.symlinkSync(def, link);
+    try {
+      assert.ok(samePath(def, def + '/'));
+      assert.ok(samePath(def, path.join(home, 'x', '..', '.claude')));
+      assert.ok(!samePath(def, path.join(home, '.claude-a')));
+      assert.ok(!samePath(def, link));
+    } finally {
+      fs.unlinkSync(link);
+    }
+  });
+
+  test('sameRealPath resolves symlinks; missing paths fall back to path.resolve', () => {
+    const link = path.join(home, 'real-link');
+    fs.symlinkSync(def, link);
+    try {
+      assert.ok(sameRealPath(def, link + '/'));
+      assert.ok(sameRealPath(path.join(home, 'missing'), path.join(home, 'missing') + '/'));
+      assert.ok(!sameRealPath(def, path.join(home, 'missing')));
+    } finally {
+      fs.unlinkSync(link);
+    }
   });
 });
 
@@ -219,42 +247,76 @@ describe('checkSafeToDelete / deleteAccountDir', () => {
   });
 });
 
-describe('linkGlobalRules', () => {
-  const file = 'CLAUDE.md';
+describe('syncMcpServers', () => {
+  const src = (): string => path.join(home, 'mcp-source.json');
+  const setSource = (servers: unknown): void => fs.writeFileSync(src(), JSON.stringify({ oauthAccount: { emailAddress: 'x@y' }, mcpServers: servers }));
   const mk = (n: string): string => {
-    const d = accountDir('rules-' + n);
+    const d = accountDir('mcp-' + n);
     fs.mkdirSync(d, { recursive: true });
     return d;
   };
-  test('default file missing → created with 0600 → linked (absolute link)', () => {
-    const defFile = path.join(def, file);
-    assert.ok(!fs.existsSync(defFile));
+  const target = (d: string): Record<string, unknown> => JSON.parse(read(path.join(d, '.claude.json')));
+  const one = { type: 'stdio', command: 'npx', args: ['-y', 'one'], env: {} };
+  const two = { type: 'http', url: 'https://example.com/mcp' };
+
+  test('missing target → created 0600 with only mcpServers', () => {
+    setSource({ one, two });
     const a = mk('a');
-    assert.equal(linkGlobalRules(a), 'linked');
-    assert.equal(mode(defFile), '600');
-    assert.ok(fs.lstatSync(path.join(a, file)).isSymbolicLink());
-    assert.equal(fs.readlinkSync(path.join(a, file)), defFile);
-    fs.writeFileSync(defFile, 'rules');
-    assert.equal(read(path.join(a, file)), 'rules');
+    assert.deepEqual(syncMcpServers(src(), a), { added: ['one', 'two'], kept: [] });
+    assert.deepEqual(target(a), { mcpServers: { one, two } });
+    assert.equal(mode(path.join(a, '.claude.json')), '600');
   });
-  test('already a link to the default file → already-linked (including relative links)', () => {
-    assert.equal(linkGlobalRules(mk('a')), 'already-linked');
-    const d = mk('d');
-    fs.symlinkSync(path.join('..', '.claude', file), path.join(d, file));
-    assert.equal(linkGlobalRules(d), 'already-linked');
-  });
-  test('regular file or link elsewhere → kept-own-file, original untouched', () => {
+
+  test('merges into an existing file: adds missing, skips identical, keeps differing, removes nothing, keeps other keys and mode', () => {
+    setSource({ one, two });
     const b = mk('b');
-    fs.writeFileSync(path.join(b, file), 'own');
-    assert.equal(linkGlobalRules(b), 'kept-own-file');
-    assert.equal(read(path.join(b, file)), 'own');
-    const c = mk('c');
-    fs.symlinkSync(path.join(b, file), path.join(c, file));
-    assert.equal(linkGlobalRules(c), 'kept-own-file');
-    assert.equal(fs.readlinkSync(path.join(c, file)), path.join(b, file));
+    const file = path.join(b, '.claude.json');
+    const own = { type: 'stdio', command: 'own' };
+    fs.writeFileSync(file, JSON.stringify({ userID: 'u', mcpServers: { one, two: own, mine: own } }), { mode: 0o640 });
+    fs.chmodSync(file, 0o640);
+    assert.deepEqual(syncMcpServers(src(), b), { added: [], kept: ['two'] });
+    setSource({ one, two, three: two });
+    assert.deepEqual(syncMcpServers(src(), b), { added: ['three'], kept: ['two'] });
+    assert.deepEqual(target(b), { userID: 'u', mcpServers: { one, two: own, mine: own, three: two } });
+    assert.equal(mode(file), '640');
+    assert.deepEqual(fs.readdirSync(b), ['.claude.json']);
   });
-  test('default directory → skipped-default', () => {
-    assert.equal(linkGlobalRules(def), 'skipped-default');
+
+  test('no source servers (missing file, invalid JSON, empty) → nothing written', () => {
+    const c = mk('c');
+    assert.deepEqual(syncMcpServers(path.join(home, 'nope.json'), c), { added: [], kept: [] });
+    fs.writeFileSync(src(), '{ half');
+    assert.deepEqual(syncMcpServers(src(), c), { added: [], kept: [] });
+    setSource({});
+    assert.deepEqual(syncMcpServers(src(), c), { added: [], kept: [] });
+    assert.ok(!fs.existsSync(path.join(c, '.claude.json')));
+  });
+
+  test('target that is not a JSON object → throws and is left unchanged', () => {
+    setSource({ one });
+    const d = mk('d');
+    for (const text of ['{ half', '[]']) {
+      fs.writeFileSync(path.join(d, '.claude.json'), text);
+      assert.throws(() => syncMcpServers(src(), d), /Not a valid JSON object/);
+      assert.equal(read(path.join(d, '.claude.json')), text);
+    }
+  });
+
+  test('a symlinked target is written through, keeping the link', () => {
+    setSource({ one });
+    const e = mk('e');
+    const real = path.join(home, 'real-claude.json');
+    fs.writeFileSync(real, '{}');
+    fs.symlinkSync(real, path.join(e, '.claude.json'));
+    assert.deepEqual(syncMcpServers(src(), e).added, ['one']);
+    assert.ok(fs.lstatSync(path.join(e, '.claude.json')).isSymbolicLink());
+    assert.deepEqual(JSON.parse(read(real)), { mcpServers: { one } });
+  });
+
+  test('the default dir is never written', () => {
+    setSource({ one });
+    assert.deepEqual(syncMcpServers(src(), def), { added: [], kept: [] });
+    assert.ok(!fs.existsSync(path.join(def, '.claude.json')));
   });
 });
 

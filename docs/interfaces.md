@@ -19,9 +19,9 @@ export const en: { ... };                                 // English table, the 
 export type MessageKey = keyof typeof en;
 export const zhCn: Record<MessageKey, string>;            // Chinese table, exactly the same keys
 ```
-- Contains two tables, `en` and `zhCn` (locale `zh-cn`). Because `zhCn` is typed `Record<MessageKey, string>`, it must have exactly the same keys as `en` (key-parity rule, enforced by the type checker). Keys are grouped by prefix (`common.*`, `account.*`, `ext.*`, `name.*`, `label.*`, `claude.*`, `codex.*`, `server.*`, `del.*`, `tools.*`).
-- Has no `vscode` import, so the pure modules (`paths.ts`, `labels.ts`, `codex/codexPaths.ts`, `codex/codexState.ts`, `codex/codexServer.ts`) can use it for the reasons and errors they return or throw.
-- Every user-visible host string goes through `t()`: messages, errors, warnings, modal text and buttons in `commands.ts`, `codex/codexCommands.ts`, `tools.ts`, `statusBar.ts`, `extension.ts`; reasons returned by pure modules (`paths.checkSafeToDelete`, `codexPaths.checkCodexSafeToDelete` / `copyCodexSeed` reasons, `codexState.preCheck` reasons and thrown errors, `codexServer.planRestart` errors, `labels.validate` messages); QuickPick labels and placeholders. Terminal names stay `Claude (<label>)` / `Codex (<label>)`.
+- Contains two tables, `en` and `zhCn` (locale `zh-cn`). Because `zhCn` is typed `Record<MessageKey, string>`, it must have exactly the same keys as `en` (key-parity rule, enforced by the type checker). Keys are grouped by prefix (`common.*`, `account.*`, `ext.*`, `name.*`, `label.*`, `claude.*`, `codex.*`, `server.*`, `del.*`, `tools.*`, `mcp.*`, `share.*`, `sync.*`).
+- Has no `vscode` import, so the pure modules (`paths.ts`, `labels.ts`, `claudeShare.ts`, `shareReport.ts`, `codex/codexPaths.ts`, `codex/codexShare.ts`, `codex/codexState.ts`, `codex/codexServer.ts`) can use it for the reasons and errors they return or throw.
+- Every user-visible host string goes through `t()`: messages, errors, warnings, modal text and buttons in `commands.ts`, `codex/codexCommands.ts`, `tools.ts`, `statusBar.ts`, `extension.ts`; reasons returned or thrown by pure modules (`paths.checkSafeToDelete`, the `claudeShare` / `codexShare` errors, `describeShareReport` summaries, `codexPaths.checkCodexSafeToDelete` / `copyCodexSeed` reasons, `codexState.preCheck` reasons and thrown errors, `codexServer.planRestart` errors, `labels.validate` messages); QuickPick labels and placeholders. Terminal names stay `Claude (<label>)` / `Codex (<label>)`.
 - Never localized: the rc marker block text in `codexState.rcBlock()` (written to user files, byte-identical), shell commands, file names, setting ids, command ids.
 
 ## src/i18nVscode.ts (imports vscode)
@@ -55,13 +55,51 @@ export function claudeJsonPath(dir: string, explicit?: boolean): string;  // acc
 export function formatClaudePlan(orgType?: string, tier?: string): string | undefined; // organizationType → name (claude_max→Max, claude_pro→Pro, claude_team/team→Team, claude_enterprise/enterprise→Enterprise, others lose the claude_ prefix and are capitalized); a trailing /_(\d+)x$/ of tier → "<n>x"; both combined as "Max 20x", only one → only that one, both empty → undefined
 export function readAccountInfo(dir: string, explicit?: boolean): AccountInfo; // synchronous; reads oauthAccount from claudeJsonPath(dir, explicit): email = emailAddress, plan = formatClaudePlan(organizationType, organizationRateLimitTier); never throws on parse failure / missing file; loggedIn = has email || <dir>/.credentials.json exists (email is the primary criterion)
 export function scanAccountDirs(): Account[];          // scans real directories (not symlinks) under os.homedir() whose basename matches DIR_BASENAME_RE, excluding sameRealPath(defaultDir()); name = basename without '.claude-'
-export function copySettingsStripped(fromDir: string, toDir: string): boolean; // see design.md 6.2 step 5; returns false when the source is missing or the target already has settings.json; writes with mode 0o600
+export function copySettingsStripped(fromDir: string, toDir: string): boolean; // used by claudeShare.copyClaudeIndependent; stripped keys in design.md 6.2 step 5; returns false when the source is missing or the target already has settings.json; writes with mode 0o600
 export function ensureAccountDir(dir: string): void;   // mkdir recursive, mode 0o700
-export type RulesLinkResult = 'linked' | 'already-linked' | 'kept-own-file' | 'skipped-default';
-export function linkRulesFile(dir: string, defDir: string, file: string): RulesLinkResult; // shared by Claude and Codex: sameRealPath(dir, defDir) → 'skipped-default'; if <defDir>/file does not exist, first create an empty file with 0600; <dir>/file missing → symlink to the absolute path of the default file → 'linked'; already a link to the default file → 'already-linked'; a regular file or a link pointing elsewhere → left alone → 'kept-own-file'; lstat errors other than ENOENT are rethrown as is
-export function linkGlobalRules(dir: string): RulesLinkResult; // linkRulesFile(dir, defaultDir(), 'CLAUDE.md')
+export interface McpSyncResult { added: string[]; kept: string[] } // added: server names written into the account; kept: names the account already has with a different definition, left untouched
+export function syncMcpServers(fromJson: string, dir: string): McpSyncResult; // used by claudeShare.copyClaudeIndependent; merges mcpServers of fromJson (the default account's info file) into <dir>/.claude.json: missing names added, identical skipped, differing kept; never removes. sameRealPath(dir, defaultDir()), source without servers or nothing to add → no write. Missing target → created 0600 with only mcpServers; existing → every other key and its mode kept, replaced atomically (<real>.planswap-<pid>.tmp + rename, symlinks followed). Throws Error(t('mcp.badTarget')) when the target is not a JSON object, Error(t('mcp.changed')) when the file changed between read and rename (left unchanged)
 export function checkSafeToDelete(dir: string): string | undefined; // returns the refusal reason (localized via t()), undefined when safe; rules in design.md 6.3 step 6
 export async function deleteAccountDir(dir: string): Promise<void>; // checkSafeToDelete first, throw Error(reason) when unsafe; fs.promises.rm recursive force
+```
+
+## src/claudeShare.ts (shared vs independent Claude accounts, no vscode import)
+
+Design in design.md 6.7. Every file-system test runs under `makeTempHome`.
+
+```ts
+export const CLAUDE_SHARED_ENTRIES: ReadonlyArray<{ name: string; kind: 'file' | 'dir' }>; // settings.json, CLAUDE.md, history.jsonl (files); projects (marker), file-history, todos, session-env, shell-snapshots, sessions, tasks, uploads, agents, commands, output-styles, hooks, rules, ide (dirs)
+export const CLAUDE_CHILD_SHARED_DIRS: readonly ['skills', 'plugins'];   // real folders in the account; every child of the default folder is linked
+export const CLAUDE_CHILD_EXCLUDES: readonly ['synced', '.trash'];      // per-account cloud-synced buckets, never linked or copied
+export const CLAUDE_IDENTITY_SETTING_KEYS: { top: string[]; env: string[] }; // top: apiKeyHelper, forceLoginMethod, forceLoginOrgUUID; env: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CONFIG_DIR
+
+export interface ShareReport {
+  linked: string[];     // entry names newly linked (children as 'skills/<child>')
+  created: string[];    // entries created empty in the default dir
+  conflicts: string[];  // entries the account has as a real file/dir or a link elsewhere; left untouched
+  refused: string[];    // entries refused for safety ('settings.json' when the default has identity keys or is not a JSON object)
+}
+export interface MigrateReport extends ShareReport {
+  moved: number;        // files moved into the default dir
+  duplicates: number;   // identical files dropped from the account
+  keptBoth: string[];   // relative paths of account copies moved next to the default file as '<name>.from-<account>'
+  backups: string[];    // account files replaced by a link, kept as '<entry>.independent-backup' in the account dir
+}
+
+export function isSharedClaudeAccount(dir: string): boolean;   // <dir>/projects is a symlink and realpath equals realpath(<defaultDir()>/projects); the default dir → false
+export function ensureClaudeLinks(dir: string): ShareReport;    // idempotent create/repair (design.md 6.7); in an already shared account a regular history.jsonl is merged back with mergeLines and relinked (reported under linked), an independent account's own one stays a conflict; missing default entries created empty (dir 0700, file 0600, settings.json '{}\n'); never touches existing default content; replaces a whole-folder skills/plugins link by per-child links; removes child links whose default target is gone; the default dir → empty report
+export function mirrorClaudeJson(fromJson: string, dir: string): { changed: string[] }; // fromJson = claudeJsonPath(defaultDir(), isExplicitConfigDir(defaultDir())); mcpServers exact copy, per-project key subset; changed lists 'mcpServers' and 'projects:<path>'; missing source → {}; source not an object → Error(t('share.badSource')); target not an object → Error(t('mcp.badTarget')); changed during write → Error(t('mcp.changed')); no write when nothing changes; the default dir → no-op
+export function claudeAccountBusy(dir: string, procRoot?: string): boolean; // a <dir>/sessions/*.json with a live pid whose <procRoot>/<pid>/environ CLAUDE_CONFIG_DIR matches dir (for the default dir: unset or the default); procRoot defaults to '/proc' (tests pass a fake)
+export function migrateClaudeToShared(dir: string, accountName: string, procRoot?: string): MigrateReport; // throws Error(t('share.busy', { name: accountName })) when busy; merge rules in design.md 6.7; ends with ensureClaudeLinks(dir) (its report merged in); a settings.json / CLAUDE.md the default dir lacks is moved there (a settings.json with identity keys stays, unlinked); never overwrites a default file, never deletes an account file without an identical copy in the default dir, never follows symlinks while moving
+export function copyClaudeIndependent(fromJson: string, dir: string): { copied: string[] }; // copySettingsStripped + CLAUDE.md + agents/commands/output-styles/hooks/rules + skills children (except the excludes) + syncMcpServers; never overwrites; copied lists the entries ('mcpServers' when servers were added)
+```
+Helpers exported for `codex/codexShare.ts` (same semantics on both sides): `lstatOrUndefined`, `realOrResolved`, `linksTo(link, target)`, `emptyReport()`, `linkEntry(link, target): 'linked' | 'ok' | 'conflict'`, `record(report, name, result)`, `freeName(base)` (first free of `base`, `base-2`, …), `sameContent`, `MergeCtx`, `mergeEntry(src, dst, rel, ctx)`, `moveEntry(src, dst)` (rename, or copy + delete across file systems, links moved as links), `mergeLines(src, dst): number` (appends the lines of src that dst lacks, whole-line comparison, order kept, bytes preserved via latin1; creates dst 0600 when missing; removes src; returns the number of appended lines), `defaultFolder(p)`, `copyTree(src, dst)` (`fs.cpSync` recursive, no overwrite, `verbatimSymlinks`).
+
+## src/shareReport.ts (no vscode import)
+
+```ts
+export interface ShareReportLike { conflicts: string[]; refused: string[]; moved?: number; duplicates?: number; keptBoth?: string[]; backups?: string[] }
+export function describeShareReport(r: ShareReportLike): string; // localized one line joined with t('common.listSep'): share.r.moved / duplicates / keptBoth / backups / conflicts / refused; linked and created entries are not reported; '' when nothing needs attention
 ```
 
 ## src/claudeSettings.ts (imports vscode)
@@ -97,9 +135,8 @@ export class AccountStore {
 export const EXTERNAL_NAME = '<external>'; // internal sentinel name of the external-directory row; never displayed; '<' cannot pass NAME_RE
 
 export class LabelStore {
-  constructor(state: vscode.Memento, key: 'claude.labels' | 'codex.labels', legacyKey: 'claude.defaultLabel' | 'codex.defaultLabel');
-  // storage: globalState[key] is Record<string /*name*/, string /*label*/>, keyed by account name;
-  // on first read, if key does not exist and legacyKey has a value, migrate it to { default: <old value> } and delete legacyKey
+  constructor(state: vscode.Memento, key: 'claude.labels' | 'codex.labels');
+  // storage: globalState[key] is Record<string /*name*/, string /*label*/>, keyed by account name
   get(name: string): string | undefined;                       // undefined when not set; own properties only (Object.hasOwn), so names such as constructor / toString / __proto__ are safe
   // set rebuilds the record with Object.fromEntries so a __proto__ name is stored as an ordinary own key (survives the JSON round-trip)
   set(name: string, label: string | undefined): Promise<void>; // undefined / empty / equal to name → delete the entry
@@ -110,7 +147,7 @@ export class LabelStore {
   //   after excluding name itself from existing: equals another account's name 'Same as an existing account name', equals another account's label 'Same as an existing account's display name'.
   //   existing only contains accounts of the same vendor (same key); the same name is allowed across Claude and Codex; entering the account's own name passes (set deletes the entry, i.e. clears the alias)
 }
-export function labelFor(name: string, labels: LabelStore): string; // name === EXTERNAL_NAME → t('account.external'); otherwise labels.get(name) ?? name
+export function labelFor(name: string, labels: LabelStore): string; // name === EXTERNAL_NAME → t('account.external'); name === 'default' → 'default' (a stored alias is ignored); otherwise labels.get(name) ?? name
 ```
 External-directory rows never have an alias; their `name` is `EXTERNAL_NAME` and their `label` is `labelFor(EXTERNAL_NAME, labels)`, i.e. `t('account.external')` ("External directory" / "外部目录").
 
@@ -119,7 +156,7 @@ External-directory rows never have an alias; their `name` is `EXTERNAL_NAME` and
 ```ts
 export type AccountKind = 'default' | 'named' | 'external';
 export type PanelMode = 'claude' | 'codex';
-export type ToolId = 'openGlobalMd' | 'openSettings' | 'reloadWindow' | 'restartExtHost' | 'restartServer' | 'cliVersions' | 'syncRules' | 'updateCli' | 'openHelp' | 'openStar';
+export type ToolId = 'openGlobalMd' | 'openSettings' | 'reloadWindow' | 'restartExtHost' | 'restartServer' | 'cliVersions' | 'sync' | 'updateCli' | 'openHelp' | 'openStar';
 
 export interface AccountView {
   kind: AccountKind;
@@ -131,6 +168,7 @@ export interface AccountView {
   plan?: string;       // formatted plan (e.g. "Max 20x", "Plus", "API key")
   loggedIn: boolean;
   isCurrent: boolean;
+  shared?: boolean;    // named rows only: true = shared with the default account (links), false = independent; undefined for default / external
 }
 
 export interface TabState {
@@ -155,8 +193,9 @@ export type FromWebview =
   | { type: 'switch'; mode: PanelMode; dir: string }
   | { type: 'terminal'; mode: PanelMode; dir: string }
   | { type: 'remove'; mode: PanelMode; dir: string }          // the frontend has completed the inline confirmation
-  | { type: 'add'; mode: PanelMode; name: string }
-  | { type: 'rename'; mode: PanelMode; dir: string; label: string } // renames that row's account; never sent for the external row
+  | { type: 'add'; mode: PanelMode; name: string; shared: boolean } // shared: the add section's checkbox (the host treats a missing value as true)
+  | { type: 'share'; mode: PanelMode; dir: string }          // convert that independent named account into a shared one (the host confirms with a modal)
+  | { type: 'rename'; mode: PanelMode; dir: string; label: string } // renames that row's account; only sent for named rows (never the default or external row)
   | { type: 'reload'; mode: PanelMode }
   | { type: 'dismissBanner'; mode: PanelMode }
   | { type: 'enable'; mode: PanelMode }
@@ -176,7 +215,7 @@ export interface PanelSource {
   pendingDir(): string | undefined;   // display name
   watchTargets(): string[];       // absolute paths of the files to watch (claude: claudeJsonPath(dir, isExplicitConfigDir(dir)) of each directory; codex: auth.json of each directory + the state file)
 }
-export function claudePanelSource(store: AccountStore, labels: LabelStore): PanelSource; // maps store.all() (label via labelFor(name, labels), email/plan via readAccountInfo); when currentDir() does not correspond to any account, appends a current row with kind='external' (name EXTERNAL_NAME, label labelFor(EXTERNAL_NAME, labels)); enabled always true; pendingDir always undefined
+export function claudePanelSource(store: AccountStore, labels: LabelStore): PanelSource; // maps store.all() (label via labelFor(name, labels), email/plan via readAccountInfo, shared via isSharedClaudeAccount for named rows); when currentDir() does not correspond to any account, appends a current row with kind='external' (name EXTERNAL_NAME, label labelFor(EXTERNAL_NAME, labels)); enabled always true; pendingDir always undefined
 export function tildify(dir: string): string;  // replaces the home directory with ~
 
 export class AccountsPanel implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -216,19 +255,21 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 
 ## src/webview/main.ts (frontend, no exports)
 
-- Imports `index.js` of `vscode-button`, `vscode-textfield`, `vscode-toolbar-button` and `vscode-icon` under `@vscode-elements/elements/dist/` (registers only the needed components, not the whole package; the count badge is a plain `span`, not `vscode-badge`).
+- Imports `index.js` of `vscode-button`, `vscode-checkbox`, `vscode-textfield`, `vscode-toolbar-button` and `vscode-icon` under `@vscode-elements/elements/dist/` (registers only the needed components, not the whole package; the count badge is a plain `span`, not `vscode-badge`).
 - Sends `FromWebview` through `acquireVsCodeApi().postMessage`; receives `ToWebview` via the `window` `message` event. Every message to the host (except `ready`) carries `mode`.
 - Top tab bar: two tab buttons Claude / Codex, the selected one highlighted; a click → sends `setTab` and switches rendering; the current tab is remembered in the Webview state with `vscode.setState({ tab })`, and `state.active` is only adopted when there is no local record; on `focusAdd` it switches to its `mode` (also sending `setTab` if needed) and focuses that page's input.
 - On startup it renders once and then sends `ready`; on `state` both pages redraw their banner and list; the add section and the "Tools" row exist once per page, are created only once and not rebuilt on redraw, and keep independent input state. When `state.locale` changes, every static text (including the add-section help text, the "Tools" row, the footer toolbar titles and the version card) is re-rendered in the new language.
 - Page structure: `#app` (scrollable, container query `panel`) contains the tab bar + two `.page` elements (each with `.page-top`: banner / disabled card / account list; `.page-tools`: "Tools" row; `.add`: add section); outside `#app` follow the version card `.versions` (hidden by default), the pinned footer toolbar `.tools`, and the extension version line `.extension-version`.
-- Per-page "Tools" row: four `vscode-button`s (secondary, icon and text): `symbol-ruler` + `CLAUDE.md`/`AGENTS.md` (title "Open global CLAUDE.md"/"Open global AGENTS.md") → `tool: 'openGlobalMd'`; `settings-gear` + "Settings" (title "Open Claude Code extension settings"/"Open Codex extension settings") → `'openSettings'`; `link` + "Sync rules" (title "Link the default account's global rules to other accounts") → `'syncRules'`; `cloud-download` + "Update CLI" (title "Update CLI in a terminal") → `'updateCli'`. Messages carry the page's `mode`; shown on the Codex page even while it is not enabled.
+- Per-page "Tools" row: four `vscode-button`s on each page (secondary, icon and text): `symbol-ruler` + `CLAUDE.md`/`AGENTS.md` (title "Open global CLAUDE.md"/"Open global AGENTS.md") → `tool: 'openGlobalMd'`; `settings-gear` + "Settings" (title "Open Claude Code extension settings"/"Open Codex extension settings") → `'openSettings'`; `sync` + "Sync shared" (title `claude.syncTitle` "Re-link every shared account to the default account and mirror its MCP servers" / `codex.syncTitle` "Re-link every shared account to the default account") → `'sync'`; `cloud-download` + "Update CLI" (title "Update CLI in a terminal") → `'updateCli'`. Messages carry the page's `mode`; shown on the Codex page even while it is not enabled.
 - Pinned footer toolbar: six `vscode-toolbar-button`s, left to right `info` "Show CLI and extension versions" → `'cliVersions'`, `refresh` "Reload Window" → `'reloadWindow'`, `debug-restart` "Restart Extension Host" → `'restartExtHost'`, `server-process` "Restart WSL Server" → `'restartServer'`, `book` "User guide" → `'openHelp'`, `star-empty` "Star" → `'openStar'`; `mode` is the current tab.
 - Below the footer toolbar, `.extension-version` shows `t('footer.version', { version: __PLANSWAP_VERSION__ })` as a centered small-text line. `esbuild.mjs` defines `__PLANSWAP_VERSION__` from the manifest version at build time; the frontend imports no manifest or Node modules.
 - Version card: on `versions`, if the card is expanded it collapses, otherwise it is filled with the title "CLI and extension versions" + close button and the `items` (each `.version-item`: `.version-label` on one line, `.version-value` on the next) and shown; the close button hides the card. Item labels come from the host (localized there); when `state.locale` changes while the card is expanded, the frontend sends `tool: 'cliVersions'` again and replaces the items with the next `versions` instead of collapsing.
-- Account row rendering: the current row is always first; 20px avatar (the default row has a `home` badge, title "Default account"); at the right end of the name line the current row has a 16px check-mark badge (`current-icon`, title "Current account", not in edit state); email line ("Logged in" when there is no email but `loggedIn`, nothing when signed out); the current row has an extra `dirLabel` line; `.row-foot` holds the tag group (plan pill + "Not logged in" pill) and the button group; the `li` has `data-plan` (the frontend maps the `plan` text and `mode` to `none` / `apikey` / `team` / `enterprise` / `tier0` / `tier1` / `tier2` / `tier3`); rows, names, emails, directories and plan pills have no `title`. Non-current rows that are not in edit state get `tabindex=0`; double-click or Enter sends `switch`.
+- Account row rendering: the current row is always first; 20px avatar (the default row has a `home` badge, title "Default account"); right after the name a shared row (`kind === 'named' && shared === true`) has a 16px `link` badge (`shared-icon`, title "Shared with the default account", not in edit state); at the right end of the name line the current row has a 16px check-mark badge (`current-icon`, title "Current account", not in edit state); email line ("Logged in" when there is no email but `loggedIn`, nothing when signed out); the current row has an extra `dirLabel` line; `.row-foot` holds the tag group (plan pill + "Not logged in" pill) and the button group; the `li` has `data-plan` (the frontend maps the `plan` text and `mode` to `none` / `apikey` / `team` / `enterprise` / `tier0` / `tier1` / `tier2` / `tier3`); rows, names, emails, directories and plan pills have no `title`. Non-current rows that are not in edit state get `tabindex=0`; double-click or Enter sends `switch`.
 - It only renders and exchanges messages; business logic and validation are authoritative on the extension side; frontend validation (`NAME_RE`, the reserved name `default`, clashes with `name` or `label` of the page's `accounts`) is only an immediate hint.
 - All text is written through `textContent`, never by concatenating HTML. Rows show `label` (not `name`), `email` and `plan`.
-- Every row with `kind !== 'external'` has a pencil icon button (title "Rename"): a click turns the name into an input (prefilled with the current `label`); the edit state is keyed by the row's `dir` (`renamingDir`); Enter sends `rename` (with `dir` and `label`), Esc cancels; on `renameResult` only the one whose `dir` matches the row being edited is handled: with `error` it is shown in red inline, without `error` edit state ends. When that directory disappears from the state, the edit state is cleared. The external-directory row has no pencil button.
+- Every row with `kind === 'named'` has a pencil icon button (title "Rename"): a click turns the name into an input (prefilled with the current `label`); the edit state is keyed by the row's `dir` (`renamingDir`); Enter sends `rename` (with `dir` and `label`), Esc cancels; on `renameResult` only the one whose `dir` matches the row being edited is handled: with `error` it is shown in red inline, without `error` edit state ends. When that directory disappears from the state, the edit state is cleared. The default row and the external-directory row have no pencil button.
+- A named row with `shared === false` that is not current has a `link` toolbar button (title "Share with the default account") that sends `{ type: 'share', dir }`; the host confirms, so the frontend has no confirmation of its own.
+- Add section: under the input a `vscode-checkbox` (`add-shared`, label "Share settings and history with the default account", checked by default, created once per page so its state survives re-renders); the help line for a valid name is `claude.addHelpShared` / `codex.addHelpShared` (per page; the Codex text says memories stay per account) or `add.help.independent` depending on it; submitting sends `{ type: 'add', name, shared: checkbox.checked }`.
 - Local UI state: `confirmingDir` (directory of the account being confirmed for removal inline; cleared when it disappears from the state), `adding` (an add was submitted, waiting for `addResult`), `renamingDir` (directory of the account being renamed inline), all per page.
 - On `addResult`: success clears that page's input; failure shows `error` in the help line.
 
@@ -249,11 +290,12 @@ export interface Deps {
   store: AccountStore;
   panel: AccountsPanel;
   statusBar: StatusBar;
-  labels: LabelStore;                    // claude.labels (legacy key claude.defaultLabel migrated automatically)
+  labels: LabelStore;                    // claude.labels
   codex?: { store: CodexAccountStore; labels: LabelStore };  // the refresh command acts on both pages; labels is codex.labels (for syncWithDisk)
   tools: ToolDeps;                       // panel tool messages are passed to runTool('claude', tool, tools)
 }
 export function registerCommands(deps: Deps): vscode.Disposable[];
+export function validateName(name: string, store: AccountStore, labels: LabelStore): string | undefined;
 export function shQuote(s: string): string;
 ```
 - Command ids: `aiSwitcher.switchAccount`, `aiSwitcher.addAccount`, `aiSwitcher.removeAccount`, `aiSwitcher.openTerminal`, `aiSwitcher.refresh`. None of the commands take arguments:
@@ -263,10 +305,12 @@ export function shQuote(s: string): string;
   - `openTerminal`: QuickPick of `store.all()`, plus the directory when the current one is external;
   - `refresh`: `await store.syncWithDisk(labels)` (and `codex.store.syncWithDisk(codex.labels)`), then `panel.refresh()` + `statusBar.update()`.
 - QuickPick items, messages and terminal names always use `labelFor(account.name, labels)`; logic still uses name / dir. All QuickPick texts and messages come from `t()`.
-- `validateName`: empty / does not match `NAME_RE` / equals `default` / clashes with `store.find(name)` ("An account with this name already exists") / equals `labelFor(a.name, labels)` of any account in `store.all()` ("Same as an existing account's display name") / `sameRealPath(accountDir(name), defaultDir())`. Only checks Claude accounts. Messages come from `t()`.
-- Calls `panel.setHandler('claude', ...)` to handle panel messages: `switch`/`terminal`/`remove`/`rename` are first verified with `panel.resolve('claude', dir)`; `remove` only handles `kind === 'named'` and counts as confirmed (no first modal); `add` runs the add flow on the trimmed name and `panel.post({ type: 'addResult', mode: 'claude', error })`; `rename` only handles rows with `kind !== 'external'` → `labels.validate(label, account.name, store.all().map(a => ({ name: a.name, label: labelFor(a.name, labels) })))`; on error `post({ type: 'renameResult', mode, dir, error })`, otherwise `labels.set(account.name, <trimmed value>)` (deletes the entry when it equals `account.name`) → refresh the panel and the status bar → `post({ type: 'renameResult', mode, dir })`; `reload` runs `workbench.action.reloadWindow`; `dismissBanner` calls `panel.setSwitchedTo(undefined)`; `tool` calls `runTool('claude', msg.tool, tools)`.
-- Adding an account: `ensureAccountDir` → `copySettingsStripped(defaultDir(), dir)` (on failure returns "Failed to create account directory: <reason>") → `linkGlobalRules(dir)` (on failure only `showWarningMessage("Account X was created, but linking the global CLAUDE.md failed: …")`, not blocking) → `store.add` → refresh.
-- Removing an account also calls `labels.remove(name)` besides `store.remove(name)`; the display name for the delete-directory prompt is captured before the alias is cleared. After `deleteAccountDir` succeeds, `store.unignore(dir)` is called.
+- `validateName` (exported so it can be unit-tested): empty / does not match `NAME_RE` / equals `default` / clashes with `store.find(name)` ("An account with this name already exists") / equals `labelFor(a.name, labels)` of any account in `store.all()` ("Same as an existing account's display name") / `sameRealPath(accountDir(name), defaultDir())`. Only checks Claude accounts. Messages come from `t()`.
+- Calls `panel.setHandler('claude', ...)` to handle panel messages: `switch`/`terminal`/`remove`/`rename` are first verified with `panel.resolve('claude', dir)`; `remove` only handles `kind === 'named'` and counts as confirmed (no first modal); `add` runs the add flow on the trimmed name with `shared = msg.shared !== false` and `panel.post({ type: 'addResult', mode: 'claude', error })`; `share` is verified with `panel.resolve('claude', dir)` and only handles `kind === 'named'` (conversion below); `rename` only handles rows with `kind === 'named'` → `labels.validate(label, account.name, store.all().map(a => ({ name: a.name, label: labelFor(a.name, labels) })))`; on error `post({ type: 'renameResult', mode, dir, error })`, otherwise `labels.set(account.name, <trimmed value>)` (deletes the entry when it equals `account.name`) → refresh the panel and the status bar → `post({ type: 'renameResult', mode, dir })`; `reload` runs `workbench.action.reloadWindow`; `dismissBanner` calls `panel.setSwitchedTo(undefined)`; `tool` calls `runTool('claude', msg.tool, tools)`.
+- Adding an account: `validateName` → `ensureAccountDir` (on failure returns "Failed to create account directory: <reason>") → shared: `ensureClaudeLinks(dir)` + `mirrorClaudeJson(defaultJson, dir)` (a non-empty `describeShareReport` → `showWarningMessage(t('share.addNotes'))`); independent: `copyClaudeIndependent(defaultJson, dir)`; an exception of this step only `showWarningMessage(t('share.addLinkFailed' | 'share.addCopyFailed'))`, not blocking → `store.add` → refresh. `defaultJson` is `claudeJsonPath(defaultDir(), isExplicitConfigDir(defaultDir()))`.
+- Switching: when the target is not `default` and `isSharedClaudeAccount(dir)`, first `ensureClaudeLinks` + `mirrorClaudeJson`; a non-empty report or an exception → `showWarningMessage(t('share.refreshWarning'))`; then `setConfigDir`.
+- Conversion (`share`): ignored for `default` or an already shared account; the current account → `showWarningMessage(t('share.current'))`; modal `t('share.confirm', { label, dir })` with button `t('share.confirmButton')`; `claudeAccountBusy(dir)` → `showWarningMessage(t('share.busy'))` and return; `migrateClaudeToShared(dir, account.name)` + `mirrorClaudeJson` → `showInformationMessage(t('share.done', { label, summary: describeShareReport(report) || t('share.nothingElse') }))`; an exception → `showErrorMessage(t('share.failed'))`; then refresh.
+- Removing an account also calls `labels.remove(name)` besides `store.remove(name)`; the display name for the delete-directory prompt and whether the account is shared (`isSharedClaudeAccount`) are captured before the alias is cleared; the prompt's detail is `t('share.removeDirDetail')` for a shared account, otherwise `t('claude.removeDirDetail')`. After `deleteAccountDir` succeeds, `store.unignore(dir)` is called.
 - After a successful switch, call `panel.setSwitchedTo(label)` and `statusBar.update()`; when `!panel.visible`, also show a notification with a "Reload Window" button.
 - The current account cannot be removed (refused with a hint to switch first); deleting the directory is always confirmed with a modal and only done through `deleteAccountDir`.
 - Behavior details in design.md section 6.
@@ -278,25 +322,31 @@ export function shQuote(s: string): string;
 export async function activate(ctx: vscode.ExtensionContext): Promise<void>;
 export function deactivate(): void;
 ```
-`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "AI Account Switcher only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels', 'claude.defaultLabel')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(ctx.globalState, 'codex.labels', 'codex.defaultLabel')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `aiSwitcher.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
+`setLocale(resolveLocale())` first, so every string below is localized → platform guard (non-linux: `showWarningMessage` once with the localized "AI Account Switcher only supports WSL/Linux.", then return) → `new AccountStore(ctx.globalState)` → `claudeLabels = new LabelStore(ctx.globalState, 'claude.labels')` → `await store.syncWithDisk(claudeLabels)` → `codexLabels = new LabelStore(ctx.globalState, 'codex.labels')` → `new StatusBar(store, claudeLabels)` → Codex initialization (`CodexAccountStore` + `syncWithDisk(codexLabels)` + `codexPanelSource(codexStore, codexLabels)`, `codex = { store: codexStore, labels: codexLabels }`; on failure only `console.error`, remember `codexInitError`, and the Codex page degrades to `{ accounts: () => [], enabled: () => false, pendingDir: () => undefined, watchTargets: () => [] }`) → assemble `tools: ToolDeps = { codexRestart: codex ? restartServerInteractive : undefined, postVersions: (items) => panel.post({ type: 'versions', items }), claudeDirs: () => store.named().map(a => a.dir), codexDirs: codex ? () => codex.store.named().map(a => a.dir) : undefined, codexShareOps: codex ? { isShared: isSharedCodexAccount, refresh: ensureCodexLinks } : undefined, labelOf: (mode, dir) => labelFor of store.findByDir(dir) / codex.store.findByDir(dir) with claudeLabels / codexLabels, else path.basename(dir) }` → `new AccountsPanel(ctx.extensionUri, { claude: claudePanelSource(store, claudeLabels), codex: codexSource }, ctx.globalState)`, `registerWebviewViewProvider(VIEW_ID, panel)` → if `codexInitError`: `panel.setHandler('codex', msg => msg.type === 'tool' ? runTool('codex', msg.tool, tools) : showErrorMessage("Codex account switching is unavailable: <reason>"))`, and the 7 `aiSwitcher.codex.*` commands are registered to show the same error → `registerCommands({ store, panel, statusBar, labels: claudeLabels, codex, tools })`, (when Codex is healthy) `registerCodexCommands({ store, panel, labels: codexLabels, tools })`, `registerToolCommands(tools)` → `panel.onDidChange` → `statusBar.update()` → `onDidChangeConfiguration(affectsSetting)` → `panel.refresh()` + `statusBar.update()` → `watchLocale(() => { panel.refresh(); statusBar.update(); })` → everything pushed to `ctx.subscriptions`.
 
 ## src/tools.ts (tools: footer toolbar and per-page "Tools" row, 2026-09-26)
 
-Shared tools live in the footer toolbar pinned to the bottom of the panel, tab-specific tools in each page's "Tools" row; both pages share one host implementation; `openGlobalMd`, `openSettings`, `syncRules` and `updateCli` depend on the mode, the others do not.
+Shared tools live in the footer toolbar pinned to the bottom of the panel, tab-specific tools in each page's "Tools" row; both pages share one host implementation; `openGlobalMd`, `openSettings`, `sync` and `updateCli` depend on the mode, the others do not.
 
 ```ts
 export interface ToolDeps {
   codexRestart?: () => Promise<void>;   // provided by codexCommands.restartServerInteractive (modal confirmation + planRestart checks for Antigravity / VSCodium; manual-restart warning only for VS Code / unknown editors); undefined when Codex is not initialized
   postVersions?: (items: Array<{ label: string; value: string }>) => void; // panel entry: pushes the version info to the sidebar; the Command Palette entry passes undefined and uses a QuickPick instead
-  claudeDirs?: () => string[];          // directories of store.named() on the Claude side (for syncRules)
+  claudeDirs?: () => string[];          // directories of store.named() on the Claude side (for sync)
   codexDirs?: () => string[];           // directories of store.named() on the Codex side; undefined when not initialized
+  codexShareOps?: ShareOps;             // { isShared: isSharedCodexAccount, refresh: ensureCodexLinks }; undefined when Codex is not initialized
+  labelOf?: (mode: PanelMode, dir: string) => string; // display name for notifications: labelFor of the registered account of that vendor, falling back to path.basename(dir)
+}
+export interface ShareOps {
+  isShared(dir: string): boolean;
+  refresh(dir: string): ShareReportLike; // re-links the account and mirrors what the vendor mirrors; returns the link report
 }
 export function runTool(mode: PanelMode, tool: ToolId, deps: ToolDeps): Promise<void>; // shared entry for panel tool messages and the Command Palette
 export function registerToolCommands(deps: ToolDeps): vscode.Disposable[];
 //   aiSwitcher.tools.openClaudeMd → runTool('claude','openGlobalMd'); openAgentsMd → runTool('codex','openGlobalMd');
 //   openSettings → QuickPick (Claude Code / Codex), then runTool(mode,'openSettings'); reloadWindow / restartExtHost → runTool('claude', …);
 //   cliVersions → runTool('claude','cliVersions', { ...deps, postVersions: undefined }) (read-only QuickPick list);
-//   syncRules → QuickPick (Claude Code (CLAUDE.md) / Codex (AGENTS.md)), then runTool(mode,'syncRules').
+//   sync → QuickPick (Claude Code / Codex, placeHolder t('tools.pick.sync')), then runTool(mode,'sync').
 //   Restarting the WSL server reuses aiSwitcher.codex.restartServer and is not registered here
 ```
 
@@ -309,25 +359,22 @@ Tool behavior (all texts via `t()`):
 - `restartExtHost`: `workbench.action.restartExtensionHost`, no confirmation.
 - `restartServer`: calls `deps.codexRestart`; when undefined, `showWarningMessage("The Codex part is not initialized; cannot restart the WSL server.")`.
 - `cliVersions`: `collectVersions()` runs `execFile('claude', ['--version'], { timeout: 8000 })` and `execFile('codex', …)` in parallel (no shell, PATH inherited from the extension host; ENOENT → "Not found", killed by the timeout → "Timed out", other → "Failed: <first line>", no output → "(no output)"), then reads `vscode.extensions.getExtension('anthropic.claude-code')?.packageJSON.version` and `getExtension('openai.chatgpt')?.packageJSON.version` (non-string → "Not found"). Returns four items: `Claude Code CLI`, "Claude Code extension", `Codex CLI`, "Codex extension" (the two extension labels are localized). With `deps.postVersions` it pushes `{ type: 'versions', items }` (shown by the frontend as the version card), otherwise `showQuickPick` (`label` / `description`, placeHolder "CLI and extension versions (display only)", selecting does nothing). No network access, no update check.
-- `syncRules`: takes `deps.claudeDirs` / `deps.codexDirs`; when missing, `showWarningMessage("The <Claude|Codex> part is not initialized; cannot sync rules.")`; calls the vendor's `linkGlobalRules` for each directory and counts by `RulesLinkResult` (the account name is derived from the directory basename without the `.claude-` / `.codex-` prefix); one `showInformationMessage` summarizes: "Linked N account(s)", "M account(s) already linked", "X, Y kept their own CLAUDE.md; merge manually, delete that file, then sync again", "Link failed: <name>: <reason>; …", joined with a separator and ending with a period; when everything is empty: "No other accounts need CLAUDE.md synced." (`AGENTS.md` for Codex).
+- `sync`: Claude uses the built-in `ShareOps` (`isSharedClaudeAccount`; refresh = `ensureClaudeLinks` + `mirrorClaudeJson(claudeJsonPath(defaultDir(), isExplicitConfigDir(defaultDir())), dir)`), Codex uses `deps.codexShareOps`; without the directory list or the ops, `showWarningMessage(t('tools.syncNotInit', { vendor }))` ("The <Claude|Codex> part is not initialized; cannot sync shared accounts."). Only the shared directories are processed (independent ones are not touched); none → `showInformationMessage(t('sync.none', { vendor }))`. Each refresh report goes through `describeShareReport`; a non-empty result or an exception is collected as `t('sync.item', { name, notes })` (name = `deps.labelOf(mode, dir)` when provided, otherwise the directory basename without `.claude-` / `.codex-`) and the next account continues. Result: `t('sync.done', { count, vendor })` as information, or as a warning followed by `t('sync.issues', { list })` when something was collected.
 
 ### Frontend
 
 - **Footer toolbar pinned to the bottom of the panel** (outside the tab pages, always visible, the content area scrolls): 6 shared icon buttons, left to right: Show CLI and extension versions (`info`), Reload Window (`refresh`), Restart Extension Host (`debug-restart`), Restart WSL Server (`server-process`), User guide (`book`), Star (`star-empty`). The message's `mode` is the current tab; the host does not distinguish modes for these 6 tools. A separate centered small-text line below the toolbar displays `v<version>`, injected from `package.json` at build time.
 - **Version card**: on `versions`, it expands above the toolbar (collapses if already expanded): title "CLI and extension versions" + close button; each item on two vertical lines (label, value).
-- **Per-page "Tools" row** (between the account list and the "Add account" section, title "Tools"): four labeled secondary buttons: `CLAUDE.md` (claude page) / `AGENTS.md` (codex page), icon `symbol-ruler` (a ruler, standing for the rules file) → `openGlobalMd`; "Settings", icon `settings-gear` → `openSettings`; "Sync rules", icon `link` (title "Link the default account's global rules to other accounts") → `syncRules`; "Update CLI", icon `cloud-download` (title "Update CLI in a terminal") → `updateCli`.
+- **Per-page "Tools" row** (between the account list and the "Add account" section, title "Tools"): four labeled secondary buttons on each page: `CLAUDE.md` (claude page) / `AGENTS.md` (codex page), icon `symbol-ruler` (a ruler, standing for the rules file) → `openGlobalMd`; "Settings", icon `settings-gear` → `openSettings`; "Sync shared", icon `sync` → `sync`; "Update CLI", icon `cloud-download` (title "Update CLI in a terminal") → `updateCli`.
 - Every click sends `{ type: 'tool', mode, tool }`. The "Tools" row is shown on the Codex page even while it is not enabled.
 
 ### package.json
 
-Commands (category "AI Account Switcher", 7 in total): `aiSwitcher.tools.openClaudeMd` (Open Global CLAUDE.md, `$(symbol-ruler)`), `aiSwitcher.tools.openAgentsMd` (Open Global AGENTS.md, `$(symbol-ruler)`), `aiSwitcher.tools.openSettings` (Open Extension Settings, `$(settings-gear)`), `aiSwitcher.tools.reloadWindow` (Reload Window, `$(refresh)`), `aiSwitcher.tools.restartExtHost` (Restart Extension Host, `$(debug-restart)`), `aiSwitcher.tools.cliVersions` (Show CLI and Extension Versions, `$(info)`), `aiSwitcher.tools.syncRules` (Sync Global Rules to Other Accounts, `$(link)`). Together with the 5 "Claude Account" and 7 "Codex Account" commands, `contributes.commands` has 19 entries. Titles and categories are `%key%` placeholders in `package.json`.
+Commands (category "AI Account Switcher", 7 in total): `aiSwitcher.tools.openClaudeMd` (Open Global CLAUDE.md, `$(symbol-ruler)`), `aiSwitcher.tools.openAgentsMd` (Open Global AGENTS.md, `$(symbol-ruler)`), `aiSwitcher.tools.openSettings` (Open Extension Settings, `$(settings-gear)`), `aiSwitcher.tools.reloadWindow` (Reload Window, `$(refresh)`), `aiSwitcher.tools.restartExtHost` (Restart Extension Host, `$(debug-restart)`), `aiSwitcher.tools.cliVersions` (Show CLI and Extension Versions, `$(info)`), `aiSwitcher.tools.sync` (Sync Shared Accounts with the Default Account, `$(sync)`). Together with the 5 "Claude Account" and 7 "Codex Account" commands, `contributes.commands` has 19 entries. Titles and categories are `%key%` placeholders in `package.json`.
 
-## Shared global rules (2026-09-26)
+## Shared and independent accounts (2026-09-26)
 
-- Global rules files: `<account dir>/CLAUDE.md` for Claude, `<account dir>/AGENTS.md` for Codex. The default account's file is the single source (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`); other account directories contain a symlink (absolute path) pointing to it.
-- The generic implementation is `linkRulesFile(dir, defDir, file)` in `src/paths.ts` (signature and behavior in the paths.ts section above); `paths.linkGlobalRules(dir)` fixes `CLAUDE.md`, `codexPaths.linkGlobalRules(dir)` fixes `AGENTS.md` (`codexPaths` also re-exports the `RulesLinkResult` type).
-- Adding an account (Claude and Codex) calls `linkGlobalRules(dir)` after copying the seed configuration; a failure only triggers `showWarningMessage` and does not block. Codex's `copyCodexSeed` only copies `config.toml`; it no longer copies `AGENTS.md`.
-- `runTool(mode, 'syncRules')` calls `linkGlobalRules` for each directory of `ToolDeps.claudeDirs()` / `codexDirs()` (the vendor's `store.named()` directories); the summary report is described above.
-- Command Palette: `aiSwitcher.tools.syncRules` (first pick Claude Code (CLAUDE.md) / Codex (AGENTS.md)).
-- Frontend: the third button "Sync rules" (icon `link`) of each page's "Tools" row sends `{ type: 'tool', mode, tool: 'syncRules' }`.
-- When an account directory is deleted, the link goes with it; the default account's file is not affected (`fs.rm` does not follow symlinks).
+- Claude: `src/claudeShare.ts` (above), design in design.md 6.7. Codex: `src/codex/codexShare.ts` (codex-interfaces.md), design in codex-design.md 8.6. Both return `ShareReport` / `MigrateReport` (types from `claudeShare.ts`) and the host formats them with `describeShareReport`.
+- The mode is detected from disk (`isSharedClaudeAccount` / `isSharedCodexAccount`) and exposed as `AccountView.shared`; it is never stored.
+- Messages: `add` carries `shared`; `share` converts an independent account; `tool: 'sync'` re-links every shared account of the page. Command Palette: `aiSwitcher.tools.sync` (first pick Claude Code / Codex).
+- Deleting a shared account's directory (`deleteAccountDir` / `deleteCodexDir`, `fs.rm` recursive) removes its links only; the default content is not affected (regression tests in `test/claudeShare.test.ts` / `test/codexShare.test.ts`).

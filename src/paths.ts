@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { t } from './i18n';
 
 export const DEFAULT_NAME = 'default';
@@ -136,37 +137,86 @@ export function ensureAccountDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
-export type RulesLinkResult = 'linked' | 'already-linked' | 'kept-own-file' | 'skipped-default';
-
-/**
- * Shares the default dir's rules file into an account dir via symlink (shared by Claude and Codex).
- * dir is the default dir → skipped-default; default file missing → create an empty file first (0600);
- * <dir>/file missing → create an absolute symlink to the default file → linked;
- * already a link to the default file → already-linked; a regular file or a link elsewhere → untouched → kept-own-file
- */
-export function linkRulesFile(dir: string, defDir: string, file: string): RulesLinkResult {
-  if (sameRealPath(dir, defDir)) return 'skipped-default';
-  const target = path.resolve(defDir, file);
-  const link = path.join(path.resolve(dir), file);
-  let st: fs.Stats | undefined;
-  try {
-    st = fs.lstatSync(link);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-  }
-  if (st) {
-    if (!st.isSymbolicLink()) return 'kept-own-file';
-    const to = path.resolve(path.dirname(link), fs.readlinkSync(link));
-    return to === path.resolve(target) ? 'already-linked' : 'kept-own-file';
-  }
-  if (!fs.existsSync(target)) fs.writeFileSync(target, '', { mode: 0o600, flag: 'wx' });
-  fs.symlinkSync(target, link);
-  return 'linked';
+export interface McpSyncResult {
+  // Server names written into the account
+  added: string[];
+  // Server names the account already has with a different definition; left untouched
+  kept: string[];
 }
 
-// Links the default account's CLAUDE.md into the account dir
-export function linkGlobalRules(dir: string): RulesLinkResult {
-  return linkRulesFile(dir, defaultDir(), 'CLAUDE.md');
+function readJsonObject(file: string): Record<string, unknown> | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const data: unknown = JSON.parse(text);
+    return isPlainObject(data) ? data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Merges the user-level MCP servers (mcpServers) of the default account's info file fromJson into <dir>/.claude.json:
+ * names the account lacks are added, identical ones skipped, differing ones kept (reported in kept); nothing is ever removed.
+ * A missing target file is created (0600) with only mcpServers; an existing one keeps every other key and its mode
+ * and is replaced atomically (temporary file + rename, symlinks followed). Throws when the target is not a JSON object
+ * or changed while merging (the CLI rewrites it). The default dir itself is never written.
+ */
+export function syncMcpServers(fromJson: string, dir: string): McpSyncResult {
+  const result: McpSyncResult = { added: [], kept: [] };
+  if (sameRealPath(dir, defaultDir())) return result;
+  const source = readJsonObject(fromJson)?.mcpServers;
+  if (!isPlainObject(source) || Object.keys(source).length === 0) return result;
+
+  const file = path.join(path.resolve(dir), '.claude.json');
+  let real = file;
+  let before: string | undefined;
+  let mode = 0o600;
+  if (fs.existsSync(file)) {
+    real = fs.realpathSync(file);
+    before = fs.readFileSync(real, 'utf8');
+    mode = fs.statSync(real).mode & 0o777;
+  }
+  let data: unknown = {};
+  if (before !== undefined) {
+    try {
+      data = JSON.parse(before);
+    } catch {
+      data = undefined;
+    }
+  }
+  if (!isPlainObject(data)) throw new Error(t('mcp.badTarget', { file: real }));
+
+  const current = isPlainObject(data.mcpServers) ? data.mcpServers : {};
+  const merged: Record<string, unknown> = { ...current };
+  for (const [name, def] of Object.entries(source)) {
+    if (!Object.hasOwn(current, name)) {
+      merged[name] = def;
+      result.added.push(name);
+    } else if (!isDeepStrictEqual(current[name], def)) {
+      result.kept.push(name);
+    }
+  }
+  if (result.added.length === 0) return result;
+
+  data.mcpServers = merged;
+  const tmp = `${real}.planswap-${process.pid}.tmp`;
+  // A temporary file left by an interrupted run is replaced
+  fs.rmSync(tmp, { force: true });
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode, flag: 'wx' });
+    // Refuse to overwrite a write the CLI made in the meantime
+    const now = fs.existsSync(real) ? fs.readFileSync(real, 'utf8') : undefined;
+    if (now !== before) throw new Error(t('mcp.changed', { file: real }));
+    fs.renameSync(tmp, real);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  return result;
 }
 
 export function checkSafeToDelete(dir: string): string | undefined {

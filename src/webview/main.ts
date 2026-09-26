@@ -1,5 +1,6 @@
 // Sidebar webview frontend: only renders and exchanges messages; all business logic lives in the extension host
 import '@vscode-elements/elements/dist/vscode-button/index.js';
+import '@vscode-elements/elements/dist/vscode-checkbox/index.js';
 import '@vscode-elements/elements/dist/vscode-textfield/index.js';
 import '@vscode-elements/elements/dist/vscode-toolbar-button/index.js';
 import '@vscode-elements/elements/dist/vscode-icon/index.js';
@@ -85,7 +86,7 @@ function avatar(a: AccountView): HTMLElement {
   const color = AVATAR_COLORS[hash % AVATAR_COLORS.length];
   const letter = a.kind === 'external' ? '?' : a.label.charAt(0).toUpperCase();
   const el = h('div', { class: 'avatar', style: `--avatar-color: var(--vscode-charts-${color})` }, letter);
-  // Default account: a home badge at the avatar's bottom-right, so it is recognizable as the home-directory account even after renaming
+  // Default account: a home badge at the avatar's bottom-right, marking it as the home-directory account
   if (a.kind === 'default') {
     el.append(h('span', { class: 'avatar-badge', title: t('account.default'), role: 'img', 'aria-label': t('account.default') }, h('vscode-icon', { name: 'home', size: '9' })));
   }
@@ -131,6 +132,8 @@ class Page {
   private readonly top = h('div', { class: 'page-top' });
   private readonly addField: TextField;
   private readonly addButton: HTMLElement & { disabled: boolean };
+  // Shared (links to the default account) vs independent (copied settings); checked by default, kept across re-renders
+  private readonly addShared: HTMLElement & { checked: boolean };
   private readonly addHelp = h('div', { class: 'help' });
   private readonly addTitle = h('span');
   private tools: HTMLElement;
@@ -156,11 +159,14 @@ class Page {
     this.text = TEXT[mode];
     this.addField = h('vscode-textfield') as TextField;
     this.addButton = h('vscode-button', { icon: 'add' }) as HTMLElement & { disabled: boolean };
+    this.addShared = h('vscode-checkbox', { class: 'add-shared', checked: true }) as HTMLElement & { checked: boolean };
+    this.addShared.checked = true;
     this.addSection = h(
       'section',
       { class: 'section add' },
       h('div', { class: 'section-title' }, this.addTitle),
       h('div', { class: 'input-group' }, this.addField, this.addButton),
+      this.addShared,
       this.addHelp,
     );
     this.addField.addEventListener('input', () => {
@@ -171,6 +177,7 @@ class Page {
       if ((e as KeyboardEvent).key === 'Enter' && !isComposing(e as KeyboardEvent)) this.submitAdd();
     });
     onClick(this.addButton, () => this.submitAdd());
+    this.addShared.addEventListener('change', () => this.updateAddHelp());
     this.tools = this.renderTools();
     this.root = h('div', { class: 'page', role: 'tabpanel', id: `panel-${mode}` }, this.top, this.tools, this.addSection);
     this.applyLocale();
@@ -182,6 +189,7 @@ class Page {
     this.addField.setAttribute('aria-label', t('add.ariaLabel'));
     this.addButton.textContent = t('add.button');
     this.addTitle.textContent = t('add.title');
+    this.addShared.textContent = t('add.shared');
     // A host add error is in the old locale; drop it so the help line shows the local validation in the new one
     if (this.addError) {
       this.addError = undefined;
@@ -336,8 +344,9 @@ class Page {
     this.addField.invalid = !!error;
     this.addButton.disabled = this.adding || !name || !!error;
     this.addHelp.className = error ? 'help error' : 'help';
+    const createKey = this.addShared.checked ? (`${this.mode}.addHelpShared` as const) : 'add.help.independent';
     this.addHelp.textContent =
-      error ?? (name ? t('add.helpCreate', { dir: this.text.dirPrefix + name }) : t('add.helpIdle', { prefix: this.text.dirPrefix }));
+      error ?? (name ? t(createKey, { dir: this.text.dirPrefix + name }) : t('add.helpIdle', { prefix: this.text.dirPrefix }));
   }
 
   private submitAdd(): void {
@@ -345,7 +354,7 @@ class Page {
     if (this.adding || this.addError || !name || this.validateName(name)) return;
     this.adding = true;
     this.updateAddHelp();
-    this.send({ type: 'add', name });
+    this.send({ type: 'add', name, shared: this.addShared.checked });
   }
 
   // ---------- Rendering ----------
@@ -435,7 +444,11 @@ class Page {
 
     const actions = h('div', { class: 'row-actions' });
     if (!editing) {
-      if (a.kind !== 'external') actions.append(toolbarButton('edit', t('row.rename'), () => this.startRename(a)));
+      if (a.kind === 'named') actions.append(toolbarButton('edit', t('row.rename'), () => this.startRename(a)));
+      // Independent account: offer converting it to a shared one (the host confirms; not while it is current)
+      if (a.kind === 'named' && a.shared === false && !a.isCurrent) {
+        actions.append(toolbarButton('link', t('row.share'), () => this.send({ type: 'share', dir: a.dir })));
+      }
       // The second click of a double-click (detail > 1) would send a duplicate switch
       if (!a.isCurrent) {
         actions.append(
@@ -468,7 +481,10 @@ class Page {
     // Current account: an icon at the right of the name line (omitted in edit mode, where the field fills the line)
     const currentIcon =
       a.isCurrent && !editing && h('span', { class: 'current-icon', title: t('account.current'), role: 'img', 'aria-label': t('account.current') }, h('vscode-icon', { name: 'check', size: '10' }));
-    const title = editing ? h('div', { class: 'row-title' }, this.renameField!) : h('div', { class: 'row-title' }, h('span', { class: 'row-name' }, a.label), currentIcon);
+    // Shared account: a link badge right after the name
+    const sharedIcon =
+      a.kind === 'named' && a.shared === true && !editing && h('span', { class: 'shared-icon', title: t('account.sharedBadge'), role: 'img', 'aria-label': t('account.sharedBadge') }, h('vscode-icon', { name: 'link', size: '10' }));
+    const title = editing ? h('div', { class: 'row-title' }, this.renameField!) : h('div', { class: 'row-title' }, h('span', { class: 'row-name' }, a.label), sharedIcon, currentIcon);
     // Line 3: tags on the left + action buttons on the right; on wide panels CSS moves them back to line 1 and the right side
     const tags = h('div', { class: 'row-tags' }, planPill(a), !a.loggedIn && h('span', { class: 'pill warn' }, t('account.notLoggedIn')));
 
@@ -514,7 +530,7 @@ class Page {
         { class: 'page-tools-row' },
         btn('symbol-ruler', this.text.mdLabel, t(`${this.mode}.mdTitle`), 'openGlobalMd'),
         btn('settings-gear', t('tools.settings'), t(`${this.mode}.settingsTitle`), 'openSettings'),
-        btn('link', t('tools.syncRules'), t('tools.syncRulesTitle'), 'syncRules'),
+        btn('sync', t('tools.sync'), t(`${this.mode}.syncTitle`), 'sync'),
         btn('cloud-download', t('tools.updateCli'), t('tools.updateCliTitle'), 'updateCli'),
       ),
     );

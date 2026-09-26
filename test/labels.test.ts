@@ -1,32 +1,16 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Memento } from 'vscode';
 import { setLocale } from '../src/i18n';
 import { EXTERNAL_NAME, LabelStore, labelFor } from '../src/labels';
-import { makeTempHome, type TempHome } from './helpers';
+import { makeTempHome, MemoryMemento, type TempHome } from './helpers';
 
 let tmp: TempHome;
 before(() => { tmp = makeTempHome('labels'); });
 after(() => tmp.restore());
 
-/** In-memory Memento stub */
-class MemoryMemento implements Memento {
-  readonly data = new Map<string, unknown>();
-  keys(): readonly string[] { return [...this.data.keys()]; }
-  get<T>(key: string): T | undefined;
-  get<T>(key: string, defaultValue: T): T;
-  get<T>(key: string, defaultValue?: T): T | undefined {
-    return this.data.has(key) ? (this.data.get(key) as T) : defaultValue;
-  }
-  async update(key: string, value: unknown): Promise<void> {
-    if (value === undefined) this.data.delete(key);
-    else this.data.set(key, value);
-  }
-}
-
 const make = (): { memento: MemoryMemento; store: LabelStore } => {
   const memento = new MemoryMemento();
-  return { memento, store: new LabelStore(memento, 'claude.labels', 'claude.defaultLabel') };
+  return { memento, store: new LabelStore(memento, 'claude.labels') };
 };
 
 describe('LabelStore get/set/remove', () => {
@@ -97,7 +81,7 @@ describe('names that are Object.prototype members', () => {
     await store.set('a', 'x');
     const reloaded = new MemoryMemento();
     await reloaded.update('claude.labels', JSON.parse(JSON.stringify(memento.get('claude.labels'))));
-    const store2 = new LabelStore(reloaded, 'claude.labels', 'claude.defaultLabel');
+    const store2 = new LabelStore(reloaded, 'claude.labels');
     assert.equal(store2.get('__proto__'), 'p');
     assert.equal(store2.get('a'), 'x');
     await store2.set('b', 'y');
@@ -109,53 +93,33 @@ describe('names that are Object.prototype members', () => {
   });
 });
 
-describe('legacy key migration', () => {
-  test('first read migrates claude.defaultLabel to { default: <old value> } and deletes the old key', async () => {
-    const memento = new MemoryMemento();
-    await memento.update('claude.defaultLabel', 'old-name');
-    const store = new LabelStore(memento, 'claude.labels', 'claude.defaultLabel');
-    assert.equal(store.get('default'), 'old-name');
-    await Promise.resolve();
-    assert.deepEqual(memento.get('claude.labels'), { default: 'old-name' });
-    assert.equal(memento.get('claude.defaultLabel'), undefined);
-  });
-  test('ignores the legacy key when the new key already exists', async () => {
-    const memento = new MemoryMemento();
-    await memento.update('codex.defaultLabel', 'old');
-    await memento.update('codex.labels', { default: 'new' });
-    const store = new LabelStore(memento, 'codex.labels', 'codex.defaultLabel');
-    assert.equal(store.get('default'), 'new');
-    assert.equal(memento.get('codex.defaultLabel'), 'old');
-  });
-});
-
 describe('validate', () => {
   const existing = [
-    { name: 'default', label: 'work' },
+    { name: 'main', label: 'work' },
     { name: 'test1', label: 'test1' },
   ];
   const { store } = make();
   test('valid → undefined (after trim)', () => {
-    assert.equal(store.validate('  fresh  ', 'default', existing), undefined);
-    assert.equal(store.validate('work', 'default', existing), undefined, 'same as its own current alias is allowed');
+    assert.equal(store.validate('  fresh  ', 'main', existing), undefined);
+    assert.equal(store.validate('work', 'main', existing), undefined, 'same as its own current alias is allowed');
   });
   test('blank', () => {
-    assert.equal(store.validate('   ', 'default', existing), 'Enter a display name');
+    assert.equal(store.validate('   ', 'main', existing), 'Enter a display name');
   });
   test('longer than 32 characters', () => {
-    assert.equal(store.validate('a'.repeat(32), 'default', existing), undefined);
-    assert.equal(store.validate('a'.repeat(33), 'default', existing), 'Display name can be at most 32 characters');
+    assert.equal(store.validate('a'.repeat(32), 'main', existing), undefined);
+    assert.equal(store.validate('a'.repeat(33), 'main', existing), 'Display name can be at most 32 characters');
   });
   test('contains a line break', () => {
-    assert.equal(store.validate('a\nb', 'default', existing), 'Display name cannot contain line breaks');
+    assert.equal(store.validate('a\nb', 'main', existing), 'Display name cannot contain line breaks');
   });
   test('reserved names: the sentinel and every localized external-directory name', () => {
-    assert.equal(store.validate(EXTERNAL_NAME, 'default', existing), `Cannot use the reserved name ${EXTERNAL_NAME}`);
-    assert.equal(store.validate('External directory', 'default', existing), 'Cannot use the reserved name External directory');
-    assert.equal(store.validate('外部目录', 'default', existing), 'Cannot use the reserved name 外部目录');
+    assert.equal(store.validate(EXTERNAL_NAME, 'main', existing), `Cannot use the reserved name ${EXTERNAL_NAME}`);
+    assert.equal(store.validate('External directory', 'main', existing), 'Cannot use the reserved name External directory');
+    assert.equal(store.validate('外部目录', 'main', existing), 'Cannot use the reserved name 外部目录');
   });
   test('same as another account name / label', () => {
-    assert.equal(store.validate('test1', 'default', existing), 'Same as an existing account name');
+    assert.equal(store.validate('test1', 'main', existing), 'Same as an existing account name');
     assert.equal(store.validate('work', 'test1', existing), "Same as an existing account's display name");
   });
 });
@@ -163,10 +127,15 @@ describe('validate', () => {
 describe('labelFor', () => {
   test('uses the alias if set, otherwise the name', async () => {
     const { store } = make();
-    assert.equal(labelFor('default', store), 'default');
-    await store.set('default', 'work');
-    assert.equal(labelFor('default', store), 'work');
+    assert.equal(labelFor('a', store), 'a');
+    await store.set('a', 'work');
+    assert.equal(labelFor('a', store), 'work');
     assert.equal(labelFor('other', store), 'other');
+  });
+  test('default is always shown as is, even with an alias stored by an earlier version', async () => {
+    const { store } = make();
+    await store.set('default', 'work');
+    assert.equal(labelFor('default', store), 'default');
   });
   test('external row gets the localized name, never the sentinel', () => {
     assert.equal(labelFor(EXTERNAL_NAME, make().store), 'External directory');

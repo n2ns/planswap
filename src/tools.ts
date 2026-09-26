@@ -2,21 +2,32 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
-import { currentDir } from './claudeSettings';
+import { currentDir, isExplicitConfigDir } from './claudeSettings';
 import { effectiveDir } from './codex/codexState';
-import { linkGlobalRules as linkClaudeRules, type RulesLinkResult } from './paths';
-import { linkGlobalRules as linkCodexRules } from './codex/codexPaths';
+import { claudeJsonPath, defaultDir } from './paths';
+import { ensureClaudeLinks, isSharedClaudeAccount, mirrorClaudeJson } from './claudeShare';
+import { describeShareReport, type ShareReportLike } from './shareReport';
 import type { PanelMode, ToolId } from './protocol';
 import { t } from './i18n';
+
+export interface ShareOps {
+  isShared(dir: string): boolean;
+  // Re-links the account and mirrors what the vendor mirrors; returns the report of the linking step
+  refresh(dir: string): ShareReportLike;
+}
 
 export interface ToolDeps {
   // "Restart WSL server" provided by codexCommands (with modal confirmation and planRestart checks); undefined when Codex is not initialized
   codexRestart?: () => Promise<void>;
   // Panel entry: push version info to the sidebar (the editor's quick input position is not under extension control, so no QuickPick)
   postVersions?: (items: Array<{ label: string; value: string }>) => void;
-  // Directories of each vendor's registered accounts (for "sync rules"); undefined when not initialized
+  // Directories of each vendor's registered named accounts (for "sync shared"); undefined when not initialized
   claudeDirs?: () => string[];
   codexDirs?: () => string[];
+  // Codex share operations; undefined when Codex is not initialized
+  codexShareOps?: ShareOps;
+  // Display name (labelFor) of a registered account dir, for user-visible text
+  labelOf?: (mode: PanelMode, dir: string) => string;
 }
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -53,8 +64,8 @@ export async function runTool(mode: PanelMode, tool: ToolId, deps: ToolDeps): Pr
       if (deps.postVersions) deps.postVersions(await collectVersions());
       else await showCliVersions();
       return;
-    case 'syncRules':
-      syncRules(mode, deps);
+    case 'sync':
+      syncShared(mode, deps);
       return;
     case 'updateCli': {
       const vendor = mode === 'claude' ? 'Claude' : 'Codex';
@@ -66,43 +77,48 @@ export async function runTool(mode: PanelMode, tool: ToolId, deps: ToolDeps): Pr
   }
 }
 
-// Links the default account's global rules file into the vendor's other account dirs and reports in one summary notification
-function syncRules(mode: PanelMode, deps: ToolDeps): void {
+const claudeShareOps: ShareOps = {
+  isShared: isSharedClaudeAccount,
+  refresh(dir) {
+    const report = ensureClaudeLinks(dir);
+    const def = defaultDir();
+    mirrorClaudeJson(claudeJsonPath(def, isExplicitConfigDir(def)), dir);
+    return report;
+  },
+};
+
+// Re-links every shared account of the vendor to the default account and reports in one notification; independent accounts are untouched
+function syncShared(mode: PanelMode, deps: ToolDeps): void {
+  const vendor = mode === 'claude' ? 'Claude' : 'Codex';
   const dirs = mode === 'claude' ? deps.claudeDirs : deps.codexDirs;
-  if (!dirs) {
-    void vscode.window.showWarningMessage(t('tools.syncNotInit', { vendor: mode === 'claude' ? 'Claude' : 'Codex' }));
+  const ops = mode === 'claude' ? claudeShareOps : deps.codexShareOps;
+  if (!dirs || !ops) {
+    void vscode.window.showWarningMessage(t('tools.syncNotInit', { vendor }));
     return;
   }
-  const link = mode === 'claude' ? linkClaudeRules : linkCodexRules;
-  const file = mode === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
   const prefix = mode === 'claude' ? '.claude-' : '.codex-';
-  // The account name is derived from the dir name (.claude-work → work)
   const nameOf = (dir: string): string => {
+    if (deps.labelOf) return deps.labelOf(mode, dir);
     const base = path.basename(dir);
     return base.startsWith(prefix) ? base.slice(prefix.length) : base;
   };
-  const counts: Record<RulesLinkResult, number> = { linked: 0, 'already-linked': 0, 'kept-own-file': 0, 'skipped-default': 0 };
-  const kept: string[] = [];
-  const failed: string[] = [];
-  for (const dir of dirs()) {
-    try {
-      const r = link(dir);
-      counts[r]++;
-      if (r === 'kept-own-file') kept.push(nameOf(dir));
-    } catch (err) {
-      failed.push(t('tools.sync.failedItem', { name: nameOf(dir), error: errText(err) }));
-    }
-  }
-  const parts: string[] = [];
-  if (counts.linked) parts.push(t('tools.sync.linked', { count: counts.linked }));
-  if (counts['already-linked']) parts.push(t('tools.sync.already', { count: counts['already-linked'] }));
-  if (kept.length) parts.push(t('tools.sync.kept', { names: kept.join(t('common.nameSep')), file }));
-  if (failed.length) parts.push(t('tools.sync.failed', { list: failed.join(t('common.listSep')) }));
-  if (parts.length === 0) {
-    void vscode.window.showInformationMessage(t('tools.sync.nothing', { file }));
+  const shared = dirs().filter((d) => ops.isShared(d));
+  if (shared.length === 0) {
+    void vscode.window.showInformationMessage(t('sync.none', { vendor }));
     return;
   }
-  void vscode.window.showInformationMessage(t('tools.sync.summary', { parts: parts.join(t('common.listSep')) }));
+  const issues: string[] = [];
+  for (const dir of shared) {
+    try {
+      const notes = describeShareReport(ops.refresh(dir));
+      if (notes) issues.push(t('sync.item', { name: nameOf(dir), notes }));
+    } catch (err) {
+      issues.push(t('sync.item', { name: nameOf(dir), notes: errText(err) }));
+    }
+  }
+  const done = t('sync.done', { count: shared.length, vendor });
+  if (issues.length) void vscode.window.showWarningMessage(`${done} ${t('sync.issues', { list: issues.join(t('common.listSep')) })}`);
+  else void vscode.window.showInformationMessage(done);
 }
 
 // claude → <current Claude effective dir>/CLAUDE.md; codex → <current Codex effective dir>/AGENTS.md
@@ -195,15 +211,15 @@ export function registerToolCommands(deps: ToolDeps): vscode.Disposable[] {
     vscode.commands.registerCommand('aiSwitcher.tools.reloadWindow', () => runTool('claude', 'reloadWindow', deps)),
     vscode.commands.registerCommand('aiSwitcher.tools.restartExtHost', () => runTool('claude', 'restartExtHost', deps)),
     vscode.commands.registerCommand('aiSwitcher.tools.cliVersions', () => runTool('claude', 'cliVersions', { ...deps, postVersions: undefined })),
-    vscode.commands.registerCommand('aiSwitcher.tools.syncRules', async () => {
+    vscode.commands.registerCommand('aiSwitcher.tools.sync', async () => {
       const picked = await vscode.window.showQuickPick(
         [
-          { label: t('tools.sync.claudeItem'), mode: 'claude' as const },
-          { label: t('tools.sync.codexItem'), mode: 'codex' as const },
+          { label: 'Claude Code', mode: 'claude' as const },
+          { label: 'Codex', mode: 'codex' as const },
         ],
-        { placeHolder: t('tools.pick.syncRules') },
+        { placeHolder: t('tools.pick.sync') },
       );
-      if (picked) await runTool(picked.mode, 'syncRules', deps);
+      if (picked) await runTool(picked.mode, 'sync', deps);
     }),
   ];
 }

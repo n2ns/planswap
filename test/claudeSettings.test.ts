@@ -2,7 +2,7 @@
 import { after, before, beforeEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
-import { currentDir, isExplicitConfigDir, setConfigDir } from '../src/claudeSettings';
+import { affectsSetting, currentDir, isExplicitConfigDir, setConfigDir } from '../src/claudeSettings';
 import { ConfigurationTarget, resetConfig, setConfig, updates } from './stubs/vscode';
 import { assertTempHome, makeTempHome, type TempHome } from './helpers';
 
@@ -102,5 +102,15 @@ describe('setConfigDir', () => {
   test('setting missing → writes an array with only the new entry', async () => {
     await setConfigDir(home + '/.claude-c');
     assert.deepEqual(last(), [{ name: 'CLAUDE_CONFIG_DIR', value: path.join(home, '.claude-c') }]);
+  });
+});
+
+describe('affectsSetting', () => {
+  test('checks exactly claudeCode.environmentVariables', () => {
+    const seen: string[] = [];
+    const event = (hit: boolean) => ({ affectsConfiguration: (s: string) => (seen.push(s), hit) });
+    assert.equal(affectsSetting(event(true)), true);
+    assert.equal(affectsSetting(event(false)), false);
+    assert.deepEqual(seen, ['claudeCode.environmentVariables', 'claudeCode.environmentVariables']);
   });
 });

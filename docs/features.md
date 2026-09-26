@@ -17,7 +17,8 @@ This document describes the extension's behavior feature by feature. The impleme
   - The value does not correspond to any registered account (e.g. set by hand) → an "External directory" ("外部目录") row is appended to the list and marked current (pinned to the first row and highlighted).
 - Email and plan come from `oauthAccount` in the account info file (usually `<dir>/.claude.json`, see section 6): the email is `emailAddress`; the plan is formatted from `organizationType` and `organizationRateLimitTier` (`claude_max` → `Max`, `claude_pro` → `Pro`, `claude_team`/`team` → `Team`, `claude_enterprise`/`enterprise` → `Enterprise`, other values lose the `claude_` prefix and are capitalized; a trailing `_<n>x` of the tier becomes `<n>x`; combined as e.g. `Max 20x`; nothing is shown when both are empty). Read-only, never copied. A missing, half-written or unparsable file counts as "unknown" without an error.
 - Signed-in state: an email is the primary criterion; without an email, an existing `.credentials.json` also counts as signed in (only the file's existence is checked, its content is never read).
-- **Account display names (aliases)**: every registered account (including `default`) can have an alias; the external-directory row cannot. Aliases are stored by account name in `globalState` `claude.labels` (`Record<account name, alias>`); no entry means not set (the account name itself is shown); the legacy single-value key `claude.defaultLabel` is migrated to `{ default: <old value> }` on first read and deleted. Aliases are display-only (sidebar, status bar, QuickPick, messages, terminal names); the directory and internal name do not change, and logic still uses the internal name and directory. How to set one: see 2.7; removing an account also clears its alias.
+- **Shared and independent accounts**: every named account is either **shared** (everything except its login identity is symlinked to the default account's directory, so settings, rules, history and sessions carry over when you switch, e.g. because one account ran out of quota) or **independent** (the default account's configuration is copied once when the account is created; history and sessions stay separate). The choice is made when adding (see 2.5); an independent account can later be converted into a shared one (see 4.6), not the other way round. The mode is never stored: an account is shared when its `projects` entry is a symlink resolving to the default directory's `projects` (details in section 5).
+- **Account display names (aliases)**: every named account can have an alias; the default row and the external-directory row cannot (the default account is always shown as `default`, and an alias stored for it by an earlier version is ignored). Aliases are stored by account name in `globalState` `claude.labels` (`Record<account name, alias>`); no entry means not set (the account name itself is shown). Aliases are display-only (sidebar, status bar, QuickPick, messages, terminal names); the directory and internal name do not change, and logic still uses the internal name and directory. How to set one: see 2.7; removing an account also clears its alias.
 
 ## 2. Sidebar
 
@@ -63,8 +64,9 @@ Each row shows:
 | Position | Content |
 |---|---|
 | Avatar | Uniform 20px circle with the first letter of the display name (uppercase), `?` for the external directory; the background is a theme chart color fixed per account name, so the same name always gets the same color; the avatar sticks to the top when the name spans several lines |
-| Avatar badge | The default row has a small 12px `home` badge at the bottom right of its avatar (title "Default account"), so it can be recognized after renaming |
+| Avatar badge | The default row has a small 12px `home` badge at the bottom right of its avatar (title "Default account") |
 | Name | Display name, bold; the external-directory row shows "External directory"; the current row has the check-mark badge at the right end of its name line (see 2.2) |
+| Shared badge | Shared accounts have a 16px flat round `link` badge right after the name (title "Shared with the default account"); independent accounts, the default row and the external-directory row have none |
 | Email | The email when available; "Logged in" with a green dot when signed in without email; no line when signed out without email |
 | Directory | Current row only, monospace, home directory shown as `~` |
 | Tag group | Plan tag (when there is a plan, colors in 2.2); a "Not logged in" capsule tag when signed out |
@@ -87,7 +89,8 @@ Row buttons are always shown (semi-transparent normally, fully opaque on mouse h
 | `terminal` run claude with this account in a terminal | Open terminal (see 4.4) | Signed-in rows (including the external-directory row) |
 | Text button "Log in" | Opens a terminal running claude to sign in (see 4.4) | Signed-out rows (including the external-directory row), always prominent |
 | `trash` remove account | Enters the inline remove confirmation (see 4.3) | Only rows that are not default, not external and not current |
-| Pencil icon "Rename" | Enters inline rename (see 2.7) | Every row that is not the external directory (including the default row) |
+| Pencil icon "Rename" | Enters inline rename (see 2.7) | Named account rows only (not the default row or the external-directory row) |
+| `link` "Share with the default account" | Converts the account into a shared one after a modal confirmation (see 4.6) | Independent named accounts that are not current |
 
 Other interactions:
 
@@ -107,9 +110,9 @@ After clicking a row's remove button, the row turns into a confirmation area in 
 
 Always present at the bottom of each page (with a divider above it):
 
-- Title "Add account", an input (placeholder "Account name, e.g. work") and an **Add** button (with the `add` icon) joined as a group, with one help line below.
+- Title "Add account", an input (placeholder "Account name, e.g. work") and an **Add** button (with the `add` icon) joined as a group; below it a checkbox "Share settings and history with the default account" (checked by default; its state is kept per page across list refreshes, like the typed text) and one help line.
 - Typing is validated live with immediate hints (details in 4.2): an invalid name turns the input red and the help line shows the reason; the add button is disabled while the input is empty, invalid, being submitted, or showing an add failure reported by the extension. The disabled state still looks like a button: accent color mixed 40% with the input background + accent outline, text and plus sign still readable (dark accent text in light themes); the enabled state is solid accent, brighter on hover, with a glow ring on focus.
-- The help line shows "Each account uses its own config directory ~/.claude-<name>" while the input is empty, and "Will create directory ~/.claude-<name> and copy the default account's settings" for a valid name.
+- The help line shows "Each account uses its own config directory ~/.claude-<name>" while the input is empty; for a valid name it follows the checkbox: "Will create ~/.claude-<name> sharing settings, history and memory with the default account" (checked; on the Codex page "Will create ~/.codex-<name> sharing settings, sessions and history with the default account (memories stay per account)") or "Will create ~/.claude-<name> with a copy of the default account's settings" (unchecked).
 - Enter or the add button submits. On success the input is cleared; on failure the reason is shown in the help line and stays (also across list refreshes) until the input is edited or the display language changes.
 - List refreshes do not affect the text already typed into the input or its focus.
 
@@ -119,10 +122,10 @@ Only one: `$(refresh)` refresh (`aiSwitcher.refresh`), which refreshes both the 
 
 ### 2.7 Inline rename
 
-After clicking the pencil icon of any non-external row, the row's name turns into an input (prefilled with the current display name, fully selected); the edit state is keyed by the row's directory (`dir`), and only one row per page can be in edit state at a time. Edit state styling: the row outline turns to the accent color; the name line is wrapped in an opaque editor-background layer, the input uses the theme input background + accent outline and bold text, with a 1px outline plus a 3px glow when focused; when validation fails the outline and glow switch to the error color and the reason is shown in red inline. In edit state the row hides its button group and the check-mark badge.
+After clicking the pencil icon of a named account row, the row's name turns into an input (prefilled with the current display name, fully selected); the edit state is keyed by the row's directory (`dir`), and only one row per page can be in edit state at a time. Edit state styling: the row outline turns to the accent color; the name line is wrapped in an opaque editor-background layer, the input uses the theme input background + accent outline and bold text, with a 1px outline plus a 3px glow when focused; when validation fails the outline and glow switch to the error color and the reason is shown in red inline. In edit state the row hides its button group and the check-mark badge.
 
 - Enter submits `rename` (with `mode`, the row's `dir` and the new display name `label`); Esc cancels and restores the row; losing focus also cancels (except while waiting for the host's result).
-- The extension first looks the row up by `dir` among the page's account rows and only accepts registered accounts (the external-directory row cannot be renamed), then validates (the extension is authoritative, the frontend only gives immediate hints); on failure the reason is shown in red inline:
+- The extension first looks the row up by `dir` among the page's account rows and only accepts named accounts (the default row and the external-directory row cannot be renamed), then validates (the extension is authoritative, the frontend only gives immediate hints); on failure the reason is shown in red inline:
   - empty after trim: "Enter a display name";
   - more than 32 characters: "Display name can be at most 32 characters";
   - contains a line break: "Display name cannot contain line breaks";
@@ -154,6 +157,7 @@ Entry points:
 Flow:
 
 1. The target already is the current account → return without doing anything.
+   When the target is a shared account, its links are first re-created or repaired and the default account's `.claude.json` is mirrored into it (as "Sync shared" does, see section 5); anything that needs attention (entries kept as the account's own, entries not shared for safety, errors) only shows the warning "Re-linking X to the default account reported: …", and the switch still happens.
 2. Read `claudeCode.environmentVariables` and build a **new array**: keep all other entries, remove every `CLAUDE_CONFIG_DIR` entry; when the target is not the default account, append `{ "name": "CLAUDE_CONFIG_DIR", "value": "<absolute path>" }`. The path contains no `~` and no trailing slash. When the original value is in object form, it is written back as an array.
 3. Write with `ConfigurationTarget.Global`. In a WSL window this writes to the WSL remote Machine settings.
 4. When the write fails, an error is shown: "Switch failed. Possible causes: the official Claude Code extension is not installed on the WSL side, or the remote settings.json has a syntax error. Original error: <error>"
@@ -181,8 +185,11 @@ Flow:
    - same as the current display name of any account on this page: "Same as an existing account's display name";
    - its directory is the same as the default directory: "This account directory is the same as the default account directory".
 3. The directory `~/.claude-<name>` is created (mode 0700) if it does not exist; an existing one is reused as is, without clearing.
-4. If `settings.json` exists in the default directory and the new directory has no `settings.json` yet, a copy is made as a starting point with the keys listed in section 5 stripped, written with mode 0600. `.claude.json` and `.credentials.json` are not copied. Then `CLAUDE.md` is symlinked to `~/.claude/CLAUDE.md` (the default file is created empty first if missing; an own file already in the new directory is kept), so only one copy of the global rules exists; a link failure only shows a warning and does not block.
-5. If creating the directory or copying the settings fails (e.g. a regular file with the same name exists, or permissions are insufficient), the help line shows "Failed to create account directory: <reason>" and the account is not registered.
+4. Depending on the checkbox (see "Shared and independent accounts" in section 5):
+   - **shared** (checked): every shared entry is linked to the default directory (missing entries are first created empty in the default directory) and the default account's `.claude.json` is mirrored into `<new dir>/.claude.json`; when something could not be linked, the warning "Account X was created and shared, but: …" lists it;
+   - **independent** (unchecked): the default account's configuration is copied once (stripped `settings.json`, `CLAUDE.md`, the configuration folders, the `skills` children and the user-level MCP servers).
+   `.credentials.json` is never read, copied or linked. A failure of this step only shows the warning "Account X was created, but linking it to the default account failed: …" / "Account X was created, but copying the default account's configuration failed: …" and does not block.
+5. If creating the directory fails (e.g. a regular file with the same name exists, or permissions are insufficient), the help line shows "Failed to create account directory: <reason>" and the account is not registered.
 6. The account is registered in the list (the directory is removed from the ignore list if it was there), the panel and the status bar are refreshed, and an account info file watcher is added for the directory.
 7. The input is cleared and the new account appears in the list. No follow-up message is shown after adding; to sign in, click the row's terminal button, or switch to the account and sign in from the official panel.
 
@@ -202,10 +209,12 @@ Flow:
    - Command Palette entry: a modal confirmation "Delete account <account name>?" with the button **Delete**.
 2. The current account cannot be removed: in the panel the current row has no remove button, and the Command Palette list does not contain the current account. To remove the current account, switch to another account first.
 3. The account is removed from the list, its alias (if any) is cleared, the directory's file watcher is released, and the panel and the status bar are refreshed.
-4. Deleting the directory is always confirmed again with a system modal (regardless of the entry point): "Account <account name> was removed from the list. Also delete directory <dir>?", with the button **Delete Directory**. The detail text: the directory contains the sign-in credentials and session history and cannot be recovered after deletion; and if you just switched away from this account without reloading, open sessions are still using this directory.
+4. Deleting the directory is always confirmed again with a system modal (regardless of the entry point): "Account <account name> was removed from the list. Also delete directory <dir>?", with the button **Delete Directory**. The detail text: the directory contains the sign-in credentials and session history and cannot be recovered after deletion; and if you just switched away from this account without reloading, open sessions are still using this directory. For a shared account the detail reads instead: "This shared account's directory only holds its login credentials and account caches; its history, settings and other shared data live in the default account and are kept. The login cannot be recovered once deleted."
 5. After confirmation, the safety checks run first (see section 7); if they pass the directory is deleted and removed from the ignore list again (so a directory recreated later with the same name is auto-discovered); if they fail or deletion errors, "Failed to delete directory: <reason>" is shown.
 
 If you choose not to delete the directory, it stays on disk and is recorded in the ignore list, so auto-discovery will not register it again. Typing the same name into the add-account input later registers it again and removes it from the ignore list.
+
+Deleting the directory of a shared account removes only its own files (credentials, `.claude.json`, account-only entries) and its symlinks; `fs.rm` does not follow symlinks, so the shared settings, history and sessions in the default directory are kept.
 
 ### 4.4 Run claude in a terminal as an account `aiSwitcher.openTerminal`
 
@@ -229,7 +238,23 @@ Prerequisite: a `claude` command on PATH.
 
 Entry points: the `$(refresh)` title bar button, the Command Palette. Scans the home directory and registers unregistered `~/.claude-*` directories (rules in section 5), re-reads each account directory's email, plan and sign-in state, redraws the panel and updates the status bar.
 
-## 5. Auto-discovery and settings copy
+### 4.6 Share an independent account
+
+Entry point: the `link` button "Share with the default account" of an independent named row that is not current (panel only, no Command Palette entry).
+
+1. The extension resolves the row by `dir` and only accepts named accounts that are not already shared; the current account is refused with "Switch away from X before sharing it.".
+2. Modal confirmation "Share X with the default account? Its history, memory, settings and other shared folders in <dir> are moved into the default account and replaced by links; the login stays. Files that differ from the default account's are kept next to them with a .from-<name> suffix for manual merging. This cannot be undone automatically.", button **Share**.
+3. Busy check: when a Claude process is still running with this configuration directory (a `<dir>/sessions/<pid>.json` whose pid is alive and whose `/proc/<pid>/environ` has `CLAUDE_CONFIG_DIR` equal to the directory), the warning "Claude Code is still running with account X; close its sessions and try again." is shown and nothing changes.
+4. Migration into the default directory (nothing is ever overwritten there):
+   - shared folders (`projects`, `file-history`, `todos`, …) are merged recursively: files missing in the default directory are moved there, identical files are dropped, and a file that differs is moved next to the default one as `<file>.from-<account name>` for manual merging; the emptied account folder is then replaced by a link;
+   - `history.jsonl`: the account's lines are appended to the default file;
+   - `settings.json` / `CLAUDE.md`: when the default directory has no such file, the account's file is moved there and becomes the shared one (a `settings.json` with a login-related key stays in the account and is not linked); otherwise the default file wins: an identical account copy is dropped, a different one is renamed to `<file>.independent-backup` in the account directory (`settings.json` stays in place when the default settings cannot be shared, see section 5);
+   - the children of `skills/` and `plugins/` (except `synced` and `.trash`) are merged the same way;
+   - finally all links are created and the default account's `.claude.json` is mirrored.
+5. The result is summarized in one notification "X is now shared with the default account. <summary>", where the summary lists files moved, identical files dropped, both versions kept ("merge manually"), backups, entries kept as the account's own and entries not shared for safety, or "Nothing needed manual attention."; an error stops the migration with "Sharing X stopped: <reason>" (what was already moved stays in the default directory).
+6. The panel is refreshed; the row now shows the shared badge.
+
+## 5. Auto-discovery, shared and independent accounts
 
 ### Auto-discovery of `~/.claude-*`
 
@@ -245,12 +270,36 @@ The account name is the basename without the `.claude-` prefix. This keeps the l
 
 ### Keys stripped when copying settings
 
-When `settings.json` is copied from the default directory into a new account directory, the following keys are deleted (no effect if absent):
+When `settings.json` is copied from the default directory into a new independent account directory, the following keys are deleted (no effect if absent):
 
 - under `env`: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`
 - top-level: `apiKeyHelper`, `forceLoginMethod`, `forceLoginOrgUUID`, `enabledPlugins`, `extraKnownMarketplaces`, `additionalMarketplaces`
 
-The copy happens only once; afterwards each directory's `settings.json` is independent. User-level MCP servers are stored in `.claude.json` and are not copied.
+The copy happens only once; afterwards the independent account's `settings.json` is its own.
+
+### Shared accounts
+
+A shared account keeps only its login identity (`.credentials.json`, `.claude.json`) and a few per-account entries; everything else is an absolute symlink to the same entry of the default directory:
+
+- files: `settings.json`, `CLAUDE.md`, `history.jsonl`;
+- folders: `projects`, `file-history`, `todos`, `session-env`, `shell-snapshots`, `sessions`, `tasks`, `uploads`, `agents`, `commands`, `output-styles`, `hooks`, `rules`, `ide`;
+- per child: `skills/` and `plugins/` are real folders in the account, and every child of the default account's folder is linked into them, except `synced` and `.trash` (per-account cloud-synced buckets); links whose default child no longer exists are removed, and a whole-folder `skills` / `plugins` link from an earlier version is replaced by per-child links.
+
+Rules:
+
+- The account is shared when `projects` is a symlink resolving to the default `projects`; this marker is read from disk every time, never stored.
+- A shared entry missing in the default directory is created empty there first (folder 0700; file 0600, `settings.json` with `{}`), so the link has a target. Existing default content is never modified by linking.
+- An entry the account already has as a regular file or folder, or as a link pointing elsewhere, is left untouched and reported ("kept the account's own: …"); merge it by hand, delete the account's copy, then sync again. Exception: when Claude Code has replaced the `history.jsonl` link of a shared account by a regular file (e.g. `claude project purge` rewrites it), the next refresh appends the lines the default file lacks to it, removes the account's file and re-creates the link. Lines the purge removed stay in the shared default history, because the merge only appends. An independent account's own `history.jsonl` is not merged by syncing.
+- `settings.json` is not linked ("not shared for safety") when the default settings are not a valid JSON object or contain a login-related key (top-level `apiKeyHelper`, `forceLoginMethod`, `forceLoginOrgUUID`, or `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR` under `env`).
+- `.claude.json` is not linked (it holds the sign-in and onboarding state) but mirrored from the default account's `.claude.json` (usually `~/.claude.json`): `mcpServers` becomes an exact copy (servers removed from the default account are removed too), and for every project path of the default account the keys `allowedTools`, `mcpServers`, `enabledMcpjsonServers`, `disabledMcpjsonServers`, `mcpContextUris`, `hasTrustDialogAccepted`, `hasClaudeMdExternalIncludesApproved` and `hasClaudeMdExternalIncludesWarningShown` are copied; all other keys stay as they are. A missing file is created (0600); an existing one keeps its mode and is replaced atomically; nothing is written when nothing changed. A file that is not a JSON object, or that Claude Code rewrote while mirroring, is left unchanged and reported; an invalid default file stops the mirror ("The default account's info file is not a valid JSON object; nothing was synced").
+- Links and the mirror are refreshed when adding the account, before switching to it (4.1), by "Sync shared" (5.5) and after converting it (4.6); there is no background sync.
+- Running sessions keep their MCP list until a new session starts.
+
+### Independent accounts
+
+An independent account gets a one-time copy of the default account's configuration when it is created (nothing is overwritten, symlinks inside copied folders are copied as links): `settings.json` with the keys above stripped (0600), `CLAUDE.md`, the folders `agents`, `commands`, `output-styles`, `hooks`, `rules` (a folder that is itself a link is copied from its real location), the children of `skills/` except `synced` and `.trash`, and the user-level MCP servers of the default `.claude.json` (servers the account lacks are added, differing ones kept, nothing removed). History, sessions and projects stay separate. Later changes in the default account are not copied; "Sync shared" does not touch independent accounts.
+
+For both modes `.credentials.json` is never read, copied or linked, so remote MCP servers that use OAuth must be authorized again in each account, and MCP `env` values (which may contain API keys) are copied in plain text into the other accounts' `.claude.json`.
 
 ## 5.5 Tool buttons
 
@@ -258,13 +307,13 @@ The copy happens only once; afterwards each directory's `settings.json` is indep
 - The last two footer buttons are User guide (`book`, Chinese "使用说明") and Star (`star-empty`). They open the GitHub README (`https://github.com/n2ns/planswap#readme`) and repository home (`https://github.com/n2ns/planswap`) in the external browser. Both pages share these buttons, including when Codex switching is disabled. Clicking Star only opens GitHub; the user stars the repository there.
 - Below the footer toolbar, a separate centered small-text line shows the PlanSwap extension version (`v<version>`), sourced from `package.json` at build time. It stays visible on both tabs, including while Codex switching is disabled.
 - **Version card**: after clicking "Show CLI and extension versions", the extension runs `claude --version` and `codex --version` in parallel (`execFile`, no shell, 8-second timeout), reads the versions of the two official extensions, and pushes them to the panel, which expands a card above the toolbar: title "CLI and extension versions" plus a close button, and below it four items `Claude Code CLI`, "Claude Code extension", `Codex CLI`, "Codex extension", each on two vertical lines (label on one line, value on the next, the value in monospace and wrappable). Clicking the info button again or close collapses it. Not installed shows "Not found", a timeout shows "Timed out", other failures show an error summary; no network access, no update check.
-- **"Tools" row inside each tab page** (between the account list and the add-account section, title "Tools", four labeled secondary buttons that wrap automatically when they do not fit):
+- **"Tools" row inside each tab page** (between the account list and the add-account section, title "Tools", labeled secondary buttons that wrap automatically when they do not fit, four on each page):
   - `CLAUDE.md` (Claude page) / `AGENTS.md` (Codex page), ruler icon `symbol-ruler`: opens `<current effective directory>/CLAUDE.md` or `<current effective directory>/AGENTS.md` (Claude uses `currentDir()`, Codex uses `effectiveDir()`); when the file does not exist, a modal asks "File does not exist. Create it?", and after confirmation an empty file (0600) is created and opened. When the file is a dangling symlink (e.g. to a deleted default rules file), the empty file is created at the link target so the link works again; if the target's directory does not exist, "Failed to create file: <reason>" is shown.
   - Settings, icon `settings-gear`: opens the Settings UI filtered by `claudeCode.` (Claude page) / `chatgpt.` (Codex page).
-  - Sync rules, icon `link` (title "Link the default account's global rules to other accounts"): calls `linkGlobalRules` for every registered non-default account directory of this page, sharing the default account's `CLAUDE.md` / `AGENTS.md` through symlinks; one notification summarizes the result: "Linked N account(s)", "M account(s) already linked", "X, Y kept their own CLAUDE.md; merge manually, delete that file, then sync again", "Link failed: …"; with no other accounts: "No other accounts need CLAUDE.md synced." (`AGENTS.md` on the Codex page). The "Tools" row is shown on the Codex page even while Codex switching is not enabled.
-  - Update CLI, icon `cloud-download` (Chinese label "更新CLI"): opens and shows a new integrated terminal named "Update Claude CLI" / "Update Codex CLI" (localized). Claude sends `claude update`; Codex sends `env -u CODEX_HOME codex update`, using the default home for this update process only so an account selected by PlanSwap does not affect standalone installation detection. The action does not change the selected account, shell startup files or extension-host environment. Progress, prompts and errors stay in the terminal; there is no pre-check or separate check button. This panel-only action is also available while Codex switching is disabled. It assumes a `claude` / `codex` command on PATH; the Codex workaround targets standalone installations under the default `~/.codex`.
-- Command Palette entries (category "AI Account Switcher"): `aiSwitcher.tools.openClaudeMd` (open the global CLAUDE.md), `aiSwitcher.tools.openAgentsMd` (open the global AGENTS.md), `aiSwitcher.tools.openSettings` (open extension settings, first a QuickPick Claude Code / Codex), `aiSwitcher.tools.reloadWindow` (reload window), `aiSwitcher.tools.restartExtHost` (restart extension host), `aiSwitcher.tools.cliVersions` (show CLI and extension versions; the Command Palette entry uses a read-only QuickPick list instead of the panel card), `aiSwitcher.tools.syncRules` (sync global rules to other accounts, first a QuickPick Claude Code (CLAUDE.md) / Codex (AGENTS.md)); restarting the WSL server reuses `aiSwitcher.codex.restartServer`.
-- When the Codex part fails to initialize (see the beginning of section 10), the toolbar and the "Tools" rows of both pages keep working; only "Restart WSL Server" and the Codex page's "Sync rules" report that Codex is not initialized.
+  - Sync shared, icon `sync` (Chinese label "同步共享账号"; title "Re-link every shared account to the default account and mirror its MCP servers" on the Claude page, "Re-link every shared account to the default account" on the Codex page): for every registered named account of this page that is shared, re-creates or repairs its links as when adding it and, on the Claude page, mirrors the default account's `.claude.json` (see "Shared accounts" in section 5; Codex: 10.12); independent accounts are not touched. With no shared accounts: "No shared Claude accounts to sync." (`Codex` on the Codex page). Otherwise one notification "Synced N shared Claude account(s) with the default account.", followed by "Needs attention: <name>: <notes>; …" (shown as a warning) when an account kept its own entries, had entries not shared for safety, or failed. The list uses each account's display name (the directory name when it is not registered). The "Tools" row is shown on the Codex page even while Codex switching is not enabled.
+  - Update CLI, icon `cloud-download` (Chinese label "更新 CLI"): opens and shows a new integrated terminal named "Update Claude CLI" / "Update Codex CLI" (localized). Claude sends `claude update`; Codex sends `env -u CODEX_HOME codex update`, using the default home for this update process only so an account selected by PlanSwap does not affect standalone installation detection. The action does not change the selected account, shell startup files or extension-host environment. Progress, prompts and errors stay in the terminal; there is no pre-check or separate check button. This panel-only action is also available while Codex switching is disabled. It assumes a `claude` / `codex` command on PATH; the Codex workaround targets standalone installations under the default `~/.codex`.
+- Command Palette entries (category "AI Account Switcher"): `aiSwitcher.tools.openClaudeMd` (open the global CLAUDE.md), `aiSwitcher.tools.openAgentsMd` (open the global AGENTS.md), `aiSwitcher.tools.openSettings` (open extension settings, first a QuickPick Claude Code / Codex), `aiSwitcher.tools.reloadWindow` (reload window), `aiSwitcher.tools.restartExtHost` (restart extension host), `aiSwitcher.tools.cliVersions` (show CLI and extension versions; the Command Palette entry uses a read-only QuickPick list instead of the panel card), `aiSwitcher.tools.sync` (Sync Shared Accounts with the Default Account, first a QuickPick Claude Code / Codex); restarting the WSL server reuses `aiSwitcher.codex.restartServer`.
+- When the Codex part fails to initialize (see the beginning of section 10), the toolbar and the "Tools" rows of both pages keep working; only "Restart WSL Server" and the Codex page's "Sync shared" report that Codex is not initialized ("The Codex part is not initialized; cannot sync shared accounts.").
 
 ## 6. Refresh triggers
 
@@ -309,7 +358,7 @@ When they pass, it is deleted with Node's `fs.rm(dir, { recursive: true, force: 
 
 ## 10. Codex account switching
 
-Independent of Claude account switching. The implementation is based on `docs/codex-design.md` (design) and `docs/codex-interfaces.md` (module contract). This extension only reads each account directory's `auth.json` and only decodes the payload of its `tokens.id_token` to display the email and plan; it never copies, swaps, caches or outputs any token and does not modify the contents of `~/.codex` (sole exception: when `AGENTS.md` is missing, an empty file is created as the symlink target).
+Independent of Claude account switching. The implementation is based on `docs/codex-design.md` (design) and `docs/codex-interfaces.md` (module contract). This extension only reads each account directory's `auth.json` and only decodes the payload of its `tokens.id_token` to display the email and plan; it never copies, links, swaps, caches or outputs any token or `auth.json`. The contents of `~/.codex` are only changed for shared accounts (10.12): missing shared entries are created empty there as link targets, and converting an account moves its files in without overwriting existing ones.
 
 If the Codex part fails to initialize on activation (e.g. an rc file is unreadable), this is only logged and Claude is not affected: the Codex page renders as "not enabled, no accounts"; account actions on the Codex page and the 7 `aiSwitcher.codex.*` commands then show "Codex account switching is unavailable: <reason>", while the toolbar and the "Tools" row work as usual (see 5.5).
 
@@ -329,18 +378,19 @@ If the Codex part fails to initialize on activation (e.g. an rc file is unreadab
   - otherwise only the second part of the `tokens.id_token` JWT is decoded (base64url, no signature check), taking `email` and `https://api.openai.com/auth`.`chatgpt_plan_type` from the payload; the plan is capitalized (`plus` → `Plus`, `pro` → `Pro`, `team` → `Team`, etc.), `prolite` → `Pro Lite`;
   - when the JSON is damaged or being written, email and plan are unknown but the account still counts as signed in;
   - the raw `access_token`/`refresh_token`/`id_token` are never stored, cached or output.
-- Each account's display name (alias) is stored by account name in `globalState` `codex.labels` (the legacy key `codex.defaultLabel` is migrated automatically on first read), with the same rules as on the Claude side (see 1 and 2.7); the aliases of both sides are independent, and the same name is allowed across Claude and Codex.
+- Every named Codex account is shared or independent, as on the Claude side (see 1); the marker is `sessions` (a symlink resolving to `~/.codex/sessions`), and the entries are listed in 10.12.
+- Each account's display name (alias) is stored by account name in `globalState` `codex.labels`, with the same rules as on the Claude side (see 1 and 2.7); the aliases of both sides are independent, and the same name is allowed across Claude and Codex.
 
 ### 10.2 Codex tab in the sidebar
 
 - **Disabled page**: when either `~/.profile` or `~/.bashrc` has no marker block, the Codex page's account list and add-account section are replaced by an explanation card (titled "Codex account switching is not enabled"; each account uses its own `CODEX_HOME` directory; the extension writes a marker block into `~/.profile` and `~/.bashrc`; switching requires restarting the editor's WSL server) and an **Enable Codex switching** button; the "Tools" row is still shown.
-- Once enabled the layout matches the Claude page: all accounts list, "Tools" row, add-account section (every non-external row has a pencil button for renaming), with these differences:
+- Once enabled the layout matches the Claude page: all accounts list, "Tools" row, add-account section (every named account row has a pencil button for renaming), with these differences:
   - No reload banner; the `reload` and `dismissBanner` messages are ignored for Codex.
   - **"Takes effect after restart" banner**: when the directory in the state file differs from the directory effective in this window, the top shows "<display name> selected; takes effect after restarting the server" (an unregistered directory shows its path), with the explanation "Restarting the server disconnects all WSL windows (reload or reopen them); integrated terminals close." and a **Restart server** button. When another window switches, this window shows the banner as well through its state file watcher.
   - Current and other rows: email and plan when there is an email; "Logged in" when signed in without email (API key mode or decoding failure); "Not logged in" when signed out.
   - Rows that are signed out and not current show `Click "Log in" to log in from a terminal, or switch and log in from the Codex panel`.
   - The terminal icon's title is "Run codex with this account in a terminal", and the sign-in button's title is "Run codex login in a terminal".
-  - The add section's help text uses `~/.codex-<name>`.
+  - The add section's help text uses `~/.codex-<name>`; the add section has the same shared checkbox (checked by default), and rows have the same shared badge and "Share with the default account" button as on the Claude page (conversion in 10.12).
   - The current (effective in this window) account row has no remove button.
 
 ### 10.3 Commands
@@ -386,25 +436,26 @@ While another switch is in progress (e.g. its confirmation is still open), a fur
 3. Detect the editor kind from the WSL server's data directory directly under `~` (whitelist): `~/.antigravity-ide-server` or `~/.antigravity-server` (older releases) → Antigravity, `~/.vscodium-server` → VSCodium (both restart automatically); `~/.vscode-server` → VS Code, anything else or a detection failure → unknown (both manual only). Modal confirmation, button **Continue**:
    - Antigravity / VSCodium: "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?" (`{editor}` is "Antigravity" or "VSCodium");
    - VS Code / unknown: "The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?" (`{hint}` is the manual method of step 5).
-4. Write the state file atomically (empty for the default account); on failure "Failed to write the state file: <reason>" and return; refresh the view.
+4. When the target is a shared account, its links are re-created or repaired first (10.12); anything that needs attention only shows the warning "Re-linking X to the default account reported: …", and the switch continues. Then write the state file atomically (empty for the default account); on failure "Failed to write the state file: <reason>" and return; refresh the view.
 5. Restart the server. VS Code / unknown: nothing is signaled and no further message is shown, because the confirmation in step 3 already contained the manual method `{hint}`, which is "Close all VS Code windows connected to this distro, wait a few seconds, then reopen them." (VS Code) or "Close all editor windows connected to this distro, wait at least 5 minutes, then reopen them. If the account has still not changed, run "wsl --shutdown" in Windows (this stops all WSL distros) and reopen." (unknown). VS Code is manual because its Windows-side wslDaemon caches the resolved port: after the server is killed a reloaded window can receive a stale port while other windows keep the daemon alive; closing all VS Code windows connected to the distro makes the daemon exit (3 s) and stop the server, and reopening starts a new one. Antigravity / VSCodium: first locate and verify the server (the parent process `process.ppid` is greater than 1; its cmdline contains `out/server-main.js` and `--start-server` and its data directory is Antigravity's or VSCodium's; the top-level `commit` of the server root's `product.json` is 40 lowercase hex characters and matches the root directory name; the value in the pid file `<dataDir>/.<commit>.pid` equals the server's parent pid); when verification fails, a warning "Cannot restart the WSL server automatically: <reason>" is shown together with the manual method "Manual alternative: close all {editor} windows connected to this distro, wait at least 5 minutes, then reopen." When it passes, `SIGTERM` is sent to the server, then to every process in `/proc` whose parent is the server (excluding this extension host), one by one (`ESRCH` and `EPERM` are ignored), without waiting.
 6. Afterwards (Antigravity / VSCodium) every WSL window shows "Cannot reconnect. Please reload the window.", and the user clicks "Reload Window" in each one.
 
 ### 10.7 Add
 
 1. Name validation as in 4.2 (`^[A-Za-z0-9_-]+$`, not `default`, not equal to the account name or display name of any account on the Codex page, `~/.codex-<name>` not equal to `~/.codex` after resolving symlinks).
-2. Create `~/.codex-<name>` (0700; reused if it exists).
-3. Copy `config.toml` from `~/.codex` (skipped when the target exists or the source does not; mode 0600); then symlink `AGENTS.md` to `~/.codex/AGENTS.md` (the default file is created empty first if missing; an own file already there is kept; a link failure only shows "Account X was created, but linking the global AGENTS.md failed: …" and does not block). `config.toml` is not copied when it contains one of the top-level keys `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`, or `model_providers` in any form (a `[model_providers]` / `[model_providers.x]` table, a dotted key `model_providers.x.base_url = …`, an inline table `model_providers = { … }`); quoted keys and whitespace around dots are recognized (`"model_provider" = …`, `[ model_providers.x ]`), a dotted key or table header counts when its first segment is blocked, comment lines are ignored, and keys after entering any other table are not top-level. Nothing else is copied.
-4. **A message is shown only when a file was not copied because of a blocked key/section**: "Account X was created; the following files were not copied: …"; a missing source, an existing target and similar cases are silent.
-5. When creating the directory or copying fails, the help line shows "Failed to create account directory: <reason>" and nothing is registered.
-6. Register the account (removing it from the ignore list), refresh the view.
+2. Create `~/.codex-<name>` (0700; reused if it exists). When this fails, the help line shows "Failed to create account directory: <reason>" and nothing is registered.
+3. Depending on the shared checkbox (see 10.12):
+   - **shared** (checked): every shared entry is linked to `~/.codex` (missing entries are first created empty there); when something could not be linked, the warning "Account X was created and shared, but: …" lists it (e.g. "not shared for safety: config.toml" when the default `config.toml` sets a login-related key);
+   - **independent** (unchecked): `config.toml` is copied from `~/.codex` as a starting point (skipped when the target exists or the source does not; mode 0600), then `AGENTS.md` and `hooks.json` (0600), the folders `rules`, `hooks`, `agents`, `themes` and the children of `skills/` except `.system` are copied once, never overwriting. `config.toml` is not copied when it contains one of the top-level keys `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `model_provider`, or `model_providers` in any form (a `[model_providers]` / `[model_providers.x]` table, a dotted key `model_providers.x.base_url = …`, an inline table `model_providers = { … }`); quoted keys and whitespace around dots are recognized (`"model_provider" = …`, `[ model_providers.x ]`), a dotted key or table header counts when its first segment is blocked, comment lines are ignored, and keys after entering any other table are not top-level. A message is shown only when a file was not copied because of a blocked key/section: "Account X was created; the following files were not copied: …"; a missing source, an existing target and similar cases are silent.
+   `auth.json` is never copied or linked. A failure of this step only shows the warning "Account X was created, but linking it to the default account failed: …" / "… but copying the default account's configuration failed: …" and does not block.
+4. Register the account (removing it from the ignore list), refresh the view.
 
 ### 10.8 Remove
 
 - Cannot be removed: the default account, the account effective in this window ("X is the account in effect in this window and cannot be deleted. Switch to another account first."), the account the state file currently points to ("X is the selected account waiting for a restart to take effect and cannot be deleted. Switch to another account first.").
 - The panel entry goes straight to the next step after the inline confirmation; the Command Palette entry shows the modal "Delete Codex account X?", button **Delete**.
 - Remove it from the list and record it in `codex.ignoredDirs`, clear the account's alias, refresh the view.
-- Modal confirmation "Account X was removed from the list. Also delete directory <dir>?" (detail: the directory contains the account's credentials, sessions and local data and cannot be recovered after deletion), button **Delete Directory**.
+- Modal confirmation "Account X was removed from the list. Also delete directory <dir>?" (detail: the directory contains the account's credentials, sessions and local data and cannot be recovered after deletion; for a shared account: "This shared account's directory only holds its login credentials and account caches; its history, settings and other shared data live in the default account and are kept. The login cannot be recovered once deleted."), button **Delete Directory**.
 - Safety checks for deleting the directory (`checkCodexSafeToDelete`); if any fails, deletion is refused with "Failed to delete directory: <reason>":
   1. `path.resolve(dir)` is a direct child of the home directory;
   2. the basename matches `^\.codex-[A-Za-z0-9_-]+$`;
@@ -412,6 +463,7 @@ While another switch is in progress (e.g. its confirmation is still open), a fur
   4. `lstat` says it is not a symlink and is a directory;
   5. **no live daemon**: read `daemon.pid`, `app-server.pid`, `daemon-updater.pid`, `app-server-updater.pid` under `<dir>/app-server-daemon/` (whichever exist); the content is JSON; take `pid` and `processIdentity.startTicks` (or `processStartTime` when missing) and compare with the start time in `/proc/<pid>/stat` (field 22); a match means the daemon is alive and deletion is refused; a missing file or parse failure counts as not alive.
 - When the checks pass, it is deleted with Node's `fs.rm(dir, { recursive: true, force: true })`, never through a shell, and removed from `codex.ignoredDirs` again (a directory recreated later with the same name is auto-discovered).
+- Deleting a shared account's directory removes only its own files and its symlinks (`fs.rm` does not follow symlinks); the shared sessions, history, settings and thread databases in `~/.codex` are kept.
 
 ### 10.9 Terminal
 
@@ -450,6 +502,27 @@ fi
 - Appending at the end adds a blank line before the block when the file ends with a newline, and only the missing newline otherwise.
 - Removal deletes everything from the start marker to the end marker (including the marker lines) and the blank line (or newline) added on installation, so install + remove restores the original bytes of a file that existed before (a file created by enabling is left empty); when the end marker is missing in either file an error is thrown and neither file is changed.
 - "Enabled" for the Codex page = both files have the marker block.
+
+### 10.12 Shared and independent Codex accounts
+
+Same model as on the Claude side (section 5), with the default directory `~/.codex`.
+
+- **Shared entries** (absolute symlinks to the same entry of `~/.codex`):
+  - files: `config.toml`, `AGENTS.md`, `hooks.json` (created with `{}` when missing), `history.jsonl`, `session_index.jsonl`;
+  - thread databases, linked as single files even while the default one does not exist yet (Codex creates it at the link target; nothing is pre-created): `state_5.sqlite`, `thread_history_1.sqlite`, `goals_1.sqlite`, `queue_1.sqlite`; SQLite puts its `-wal` / `-shm` files next to the target;
+  - `.tmp/rollout-maintenance.lock` (inside a real `.tmp` folder of the account; `.tmp` itself is never linked, and `~/.codex/.tmp` is created when missing), so two accounts do not maintain the shared rollouts at the same time;
+  - folders: `sessions` (the marker), `archived_sessions`, `rules`, `hooks`, `agents`, `themes`, `thread-writer-locks`, `rollout-migrations`, `attachments`, `generated_images`, `shell_snapshots`, `tui-thread-reference-capabilities`;
+  - per child: every child of `~/.codex/skills` except `.system`, and of `~/.codex/plugins/cache` except `openai-curated-remote`.
+- **Never shared** (stay per account): `auth.json`, `memories/` and the memories databases (Codex refuses a symlinked memory root), logs, the app-server daemon files, caches, `installation_id`, `version.json`, the rest of `plugins/`, `.tmp/rollout-compression.lock` (Codex creates it with `O_EXCL`, which fails on a dangling link), and every other entry not listed above.
+- `config.toml` is not linked ("not shared for safety") when the default config cannot be read or sets one of the top-level keys `model_provider`, `forced_login_method`, `forced_chatgpt_workspace_id`, `sqlite_home`, `log_dir`, `cli_auth_credentials_store`, `mcp_oauth_credentials_store`, `chatgpt_base_url`, `openai_base_url`, `profile`, `oss_provider`, or a `model_providers` / `profiles` table (same TOML detection as in 10.7).
+- Repair: when Codex has replaced the `history.jsonl` or `session_index.jsonl` link of a shared account by a regular file (it rewrites `session_index.jsonl` by rename when a thread is deleted), the lines the default file lacks are appended to it, the account file is removed and the link re-created. A regular thread database in a shared account (after a Codex version bump or corruption recovery) is reported as kept and left untouched. Other entries the account has as its own are reported and left untouched, as on the Claude side.
+- Links are refreshed when adding the account, after the switch confirmation (10.6), by "Sync shared" (5.5) and after converting it; there is no `.claude.json`-style mirror on the Codex side.
+- **Independent accounts**: see 10.7 step 3.
+- **Converting** an independent account (the row's `link` button; not for the account effective in this window or the selected account: "Switch away from X before sharing it."):
+  1. Modal confirmation "Share X with the default account? Its sessions, history, settings, rules, skills and thread databases in <dir> are moved into the default account and replaced by links; the login and memories stay per account. Files that differ from the default account's are kept next to them with a .from-<name> suffix for manual merging. Resuming a session started by another ChatGPT account may be rejected by the server. This cannot be undone automatically.", button **Share**.
+  2. Busy check: a live app-server daemon of the account (as in 10.8), or any process whose executable is named `codex` and whose `CODEX_HOME` (from `/proc/<pid>/environ`) resolves to the account directory → "Codex is still running with account X; close it (including the editor's Codex panel sessions) and try again." and nothing changes. Processes that merely inherit `CODEX_HOME` (shells, MCP servers) do not count.
+  3. Migration into `~/.codex`, never overwriting: folders are merged as on the Claude side (differing files kept as `<file>.from-<account name>`); `history.jsonl` / `session_index.jsonl`: the lines the default file lacks are appended; `config.toml` / `AGENTS.md` / `hooks.json` / `.tmp/rollout-maintenance.lock`: when `~/.codex` lacks the file it is moved there and becomes the shared one (a `config.toml` with a login-related key stays in the account and is not linked); otherwise the default wins, an identical copy is dropped and a different one is renamed to `<file>.independent-backup` (`config.toml` stays when the default config cannot be shared); each thread database is renamed with its `-wal` / `-shm` files to `<db>.independent-backup` (Codex rebuilds thread metadata from the session files); the `skills` and `plugins/cache` children are merged; finally all links are created.
+  4. Summary notification as on the Claude side (4.6 step 5), then the view is refreshed.
 
 ## 11. Language
 

@@ -22,7 +22,7 @@
   "command.tools.reloadWindow": "Reload Window",
   "command.tools.restartExtHost": "Restart Extension Host",
   "command.tools.cliVersions": "Show CLI and Extension Versions",
-  "command.tools.syncRules": "Sync Global Rules to Other Accounts",
+  "command.tools.sync": "Sync Shared Accounts with the Default Account",
   "viewContainer.title": "AI Account Switcher",
   "view.name": "AI Account Switcher",
   "config.title": "AI Account Switcher",
