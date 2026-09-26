@@ -33,7 +33,8 @@ ai-switcher/
 │   ├── interfaces.md             Module interface contract
 │   ├── features.md               User-facing behavior
 │   ├── codex-design.md           Codex design
-│   └── codex-interfaces.md       Codex module contract
+│   ├── codex-interfaces.md       Codex module contract
+│   └── development.md            Development notes (editor / environment problems)
 ├── resources/
 │   └── account.svg               Activity bar icon
 ├── scripts/
@@ -227,7 +228,7 @@ Sources: `openai/codex` source code (main as of 2026-09-25), the local `openai.c
 `npm test` covers the pure modules only; after a change, verify the UI manually in a **WSL window**. Two ways:
 
 - **Install the vsix**: `npm run package`, then in the WSL window run `Extensions: Install from VSIX...`, install and reload.
-- **Extension Development Host**: open this repository in a WSL window and press F5 (the "Run Extension" configuration). `.vscode/tasks.json` runs `npm run build` first and then starts the Extension Development Host window. For frontend problems run `Developer: Open Webview Developer Tools` in the development host to see the console (e.g. CSP errors). If the vsix of this extension is installed, disable it in the development host first to avoid duplicate command and view registrations.
+- **Extension Development Host**: open this repository in a WSL window and press F5 (the "Run Extension" configuration). `.vscode/tasks.json` runs `npm run build` first and then starts the Extension Development Host window. For frontend problems run `Developer: Open Webview Developer Tools` in the development host to see the console (e.g. CSP errors). If the vsix of this extension is installed, disable it in the development host first to avoid duplicate command and view registrations. If F5 never attaches (VS Code 1.139, "Could not connect to debug target"), see `docs/development.md` section 1.
 
 This checklist creates and deletes directories under the real `~` and is performed by the user personally; agents must never perform its write or delete steps in the real home directory themselves. Using test accounts is recommended to avoid deleting real account directories by mistake. Checks:
 
