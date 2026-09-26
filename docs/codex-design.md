@@ -92,7 +92,7 @@ fi
 |---|---|---|
 | `~/.antigravity-ide-server` | `antigravity` | automatic (pid file) |
 | `~/.vscodium-server` | `vscodium` | automatic (pid file) |
-| `~/.vscode-server`, `~/.vscode-server-insiders` | `vscode` | manual guidance only (reason: section 2 item 13) |
+| `~/.vscode-server` | `vscode` | manual guidance only (reason: section 2 item 13) |
 | anything else, or detection failure | `unknown` | generic manual guidance only |
 
 - Manual kinds (`vscode`, `unknown`) are never signaled; the switch still writes the state file, and the user restarts the server by hand.
@@ -110,7 +110,7 @@ fi
 - Manual method, by kind (`{editor}` is "Antigravity" or "VSCodium", not localized):
   - `antigravity` / `vscodium`: "Manual alternative: close all {editor} windows connected to this distro, wait at least 5 minutes, then reopen." (the server auto-shutdown delay is 300 seconds)
   - `vscode`: "Close all VS Code windows connected to this distro, wait a few seconds, then reopen them."
-  - `unknown`: "Close all editor windows connected to this distro and reopen them after the editor's WSL server has exited."
+  - `unknown`: "Close all editor windows connected to this distro, wait at least 5 minutes, then reopen them. If the account has still not changed, run "wsl --shutdown" in Windows (this stops all WSL distros) and reopen."
 - Modal confirmation before switching:
   - automatic kinds: "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?"
   - manual kinds: "The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?" (`{hint}` is the manual method above); after confirming, the state file is written and no further warning is shown.

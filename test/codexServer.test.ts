@@ -66,10 +66,10 @@ describe('classifyDataDir', () => {
     assert.equal(classifyDataDir('/home/u/.antigravity-ide-server', home), 'antigravity');
     assert.equal(classifyDataDir('/home/u/.vscodium-server', home), 'vscodium');
     assert.equal(classifyDataDir('/home/u/.vscode-server', home), 'vscode');
-    assert.equal(classifyDataDir('/home/u/.vscode-server-insiders', home), 'vscode');
   });
-  test('unknown name, nested path or a different home → unknown', () => {
+  test('unknown name (including VS Code Insiders), nested path or a different home → unknown', () => {
     assert.equal(classifyDataDir('/home/u/.cursor-server', home), 'unknown');
+    assert.equal(classifyDataDir('/home/u/.vscode-server-insiders', home), 'unknown');
     assert.equal(classifyDataDir('/home/u/x/.vscodium-server', home), 'unknown');
     assert.equal(classifyDataDir('/home/v/.antigravity-ide-server', home), 'unknown');
     assert.equal(classifyDataDir('/home/u/constructor', home), 'unknown');

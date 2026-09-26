@@ -13,7 +13,6 @@ const DATA_DIR_KINDS: Record<string, ServerKind> = {
   '.antigravity-ide-server': 'antigravity',
   '.vscodium-server': 'vscodium',
   '.vscode-server': 'vscode',
-  '.vscode-server-insiders': 'vscode',
 };
 
 /** Parses field 4 (parent pid) of /proc/<pid>/stat. comm may contain spaces and parentheses, so split after the last ')'. */

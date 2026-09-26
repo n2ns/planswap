@@ -28,9 +28,22 @@ Switch between the Claude Code and Codex subscription accounts you own (Claude P
 
 ## Requirements
 
-- VS Code (or a VS Code-based editor such as Antigravity IDE or VSCodium) 1.107 or later, used through a **WSL remote window**. Native Windows and macOS are not supported.
+- Antigravity IDE, VSCodium or VS Code, 1.107 or later, used through a **WSL remote window** (see [Supported editors](#supported-editors)). Native Windows and macOS are not supported.
 - The official Claude Code and/or Codex extensions installed on the WSL side.
 - For Codex switching: `bash` as the login shell.
+
+## Supported editors
+
+Claude switching only changes the Claude Code extension's setting, so it does not depend on the editor. Codex switching only takes effect after the editor's WSL server restarts, and whether PlanSwap can do that for you depends on the editor. PlanSwap recognizes the editor by its WSL server directory under `~`.
+
+| Editor | WSL server directory | Claude switching | Codex switching |
+| --- | --- | --- | --- |
+| Antigravity IDE | `~/.antigravity-ide-server` | ✅ | ✅ Server restarted automatically; click **Reload Window** in each WSL window |
+| VSCodium | `~/.vscodium-server` | ✅ | ✅ Server restarted automatically; click **Reload Window** in each WSL window |
+| VS Code | `~/.vscode-server` | ✅ | ⚠️ Manual: close all VS Code windows connected to the distro, wait a few seconds, then reopen them |
+| Other editors (including VS Code Insiders) | — | ❌ Not supported | ❌ Not supported; PlanSwap only shows generic manual instructions: close all editor windows connected to the distro, wait at least 5 minutes, then reopen them, or run `wsl --shutdown` in Windows if the account has still not changed |
+
+Only Antigravity IDE has been tested end to end. The VSCodium and VS Code rows follow from how their WSL servers are laid out and started, and have not been tested in those editors yet.
 
 ## Install
 
@@ -55,9 +68,7 @@ Open **AI Account Switcher** in the activity bar.
 
 1. On the Codex tab, click **Enable Codex switching**. After a confirmation, a small marker block is added to `~/.profile` and `~/.bashrc`.
 2. Add an account and sign in the same way as for Claude.
-3. Switch to it. Because Codex reads its account only at startup, the switch takes effect only after the editor's **WSL server restarts**:
-   - **Antigravity and VSCodium**: PlanSwap restarts the server for you. Every WSL window disconnects and needs one **Reload Window** click, and integrated terminals close.
-   - **VS Code** (and editors PlanSwap does not recognize): the server cannot be restarted automatically. Close all VS Code windows connected to the distro, wait a few seconds, then reopen them (for other editors: reopen after the editor's WSL server has exited).
+3. Switch to it. Because Codex reads its account only at startup, the switch takes effect only after the editor's **WSL server restarts**. In Antigravity and VSCodium, PlanSwap restarts it for you: every WSL window disconnects and needs one **Reload Window** click, and integrated terminals close. In other editors you close and reopen the windows yourself (see [Supported editors](#supported-editors)).
 
 ## Language
 
@@ -68,7 +79,7 @@ Set `aiSwitcher.language` to `auto` (default, follows VS Code), `en` or `zh-cn`.
 - Sessions that are already open keep the old account until the window is reloaded.
 - A switch applies to all WSL windows, not just the current one.
 - Each account has its own settings, session history and workspace trust.
-- Codex switching costs a WSL server restart and depends on the editor starting a new server after the old one exits. PlanSwap restarts the server automatically only in Antigravity and VSCodium; in VS Code and other editors you close and reopen the windows yourself.
+- Codex switching costs a WSL server restart and depends on the editor starting a new server after the old one exits. Automatic restart is available only in Antigravity and VSCodium (see [Supported editors](#supported-editors)).
 
 ## Privacy
 

@@ -60,7 +60,7 @@ export const en = {
     'Manual alternative: close all {editor} windows connected to this distro, wait at least 5 minutes, then reopen.',
   'codex.manualRestartHintVscode': 'Close all VS Code windows connected to this distro, wait a few seconds, then reopen them.',
   'codex.manualRestartHintUnknown':
-    "Close all editor windows connected to this distro and reopen them after the editor's WSL server has exited.",
+    'Close all editor windows connected to this distro, wait at least 5 minutes, then reopen them. If the account has still not changed, run "wsl --shutdown" in Windows (this stops all WSL distros) and reopen.',
   'codex.manualRestartRequired': "This editor's WSL server cannot be restarted automatically. {hint}",
   'codex.switchConfirm':
     "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?",
@@ -212,7 +212,7 @@ export const zhCn: Record<MessageKey, string> = {
 
   'codex.manualRestartHint': '手动方式：关闭所有连接到该发行版的 {editor} 窗口，等待至少 5 分钟后重新打开。',
   'codex.manualRestartHintVscode': '关闭所有连接到该发行版的 VS Code 窗口，等待几秒后重新打开。',
-  'codex.manualRestartHintUnknown': '关闭所有连接到该发行版的编辑器窗口，待编辑器的 WSL 服务端退出后重新打开。',
+  'codex.manualRestartHintUnknown': '关闭所有连接到该发行版的编辑器窗口，等待至少 5 分钟后重新打开；若账号仍未切换，请在 Windows 中运行 "wsl --shutdown"（会停止所有 WSL 发行版）后重新打开。',
   'codex.manualRestartRequired': '无法自动重启此编辑器的 WSL 服务端。{hint}',
   'codex.switchConfirm':
     '切换 Codex 账号会重启 {editor} 的 WSL 服务端：所有 WSL 窗口会断开并提示重新加载，所有扩展重启，集成终端关闭。继续？',
