@@ -377,7 +377,7 @@ Seven commands appear in the Command Palette in the category "Codex Account" ("C
 
 1. The target is both the directory effective in this window and the content of the state file → "X is already the current account." and return.
 2. The target directory does not exist → error "Account directory does not exist: <dir>".
-3. Detect the editor kind from the WSL server's data directory directly under `~` (whitelist): `~/.antigravity-ide-server` → Antigravity, `~/.vscodium-server` → VSCodium (both restart automatically); `~/.vscode-server` → VS Code, anything else or a detection failure → unknown (both manual only). Modal confirmation, button **Continue**:
+3. Detect the editor kind from the WSL server's data directory directly under `~` (whitelist): `~/.antigravity-ide-server` or `~/.antigravity-server` (older releases) → Antigravity, `~/.vscodium-server` → VSCodium (both restart automatically); `~/.vscode-server` → VS Code, anything else or a detection failure → unknown (both manual only). Modal confirmation, button **Continue**:
    - Antigravity / VSCodium: "Switching the Codex account restarts {editor}'s WSL server: all WSL windows disconnect and prompt to reload, all extensions restart, and integrated terminals close. Continue?" (`{editor}` is "Antigravity" or "VSCodium");
    - VS Code / unknown: "The new Codex account takes effect only after the WSL server restarts, which this editor cannot do automatically. {hint} Continue?" (`{hint}` is the manual method of step 5).
 4. Write the state file atomically (empty for the default account); on failure "Failed to write the state file: <reason>" and return; refresh the view.

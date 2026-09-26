@@ -64,15 +64,25 @@ describe('classifyDataDir', () => {
   const home = '/home/u';
   test('maps every whitelisted name directly under home', () => {
     assert.equal(classifyDataDir('/home/u/.antigravity-ide-server', home), 'antigravity');
+    assert.equal(classifyDataDir('/home/u/.antigravity-server', home), 'antigravity');
     assert.equal(classifyDataDir('/home/u/.vscodium-server', home), 'vscodium');
     assert.equal(classifyDataDir('/home/u/.vscode-server', home), 'vscode');
   });
-  test('unknown name (including VS Code Insiders), nested path or a different home → unknown', () => {
+  test('unknown name (including VS Code and VSCodium Insiders), nested path or a different home → unknown', () => {
     assert.equal(classifyDataDir('/home/u/.cursor-server', home), 'unknown');
     assert.equal(classifyDataDir('/home/u/.vscode-server-insiders', home), 'unknown');
+    assert.equal(classifyDataDir('/home/u/.vscodium-server-insiders', home), 'unknown');
     assert.equal(classifyDataDir('/home/u/x/.vscodium-server', home), 'unknown');
     assert.equal(classifyDataDir('/home/v/.antigravity-ide-server', home), 'unknown');
     assert.equal(classifyDataDir('/home/u/constructor', home), 'unknown');
+  });
+  test('home reached through a symlink still matches', () => {
+    const real = path.join(tmp.home, 'real-home');
+    const link = path.join(tmp.home, 'link-home');
+    fs.mkdirSync(path.join(real, '.vscodium-server'), { recursive: true });
+    fs.symlinkSync(real, link);
+    assert.equal(classifyDataDir(path.join(real, '.vscodium-server'), link), 'vscodium');
+    assert.equal(classifyDataDir(path.join(link, '.vscodium-server'), real), 'vscodium');
   });
 });
 

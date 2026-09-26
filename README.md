@@ -38,10 +38,9 @@ Claude switching only changes the Claude Code extension's setting, so it does no
 
 | Editor | WSL server directory | Claude switching | Codex switching |
 | --- | --- | --- | --- |
-| Antigravity IDE | `~/.antigravity-ide-server` | ✅ | ✅ Server restarted automatically; click **Reload Window** in each WSL window |
+| Antigravity IDE | `~/.antigravity-ide-server` (older releases: `~/.antigravity-server`) | ✅ | ✅ Server restarted automatically; click **Reload Window** in each WSL window |
 | VSCodium | `~/.vscodium-server` | ✅ | ✅ Server restarted automatically; click **Reload Window** in each WSL window |
 | VS Code | `~/.vscode-server` | ✅ | ⚠️ Manual: close all VS Code windows connected to the distro, wait a few seconds, then reopen them |
-| Other editors (including VS Code Insiders) | — | ❌ Not supported | ❌ Not supported; PlanSwap only shows generic manual instructions: close all editor windows connected to the distro, wait at least 5 minutes, then reopen them, or run `wsl --shutdown` in Windows if the account has still not changed |
 
 Only Antigravity IDE has been tested end to end. The VSCodium and VS Code rows follow from how their WSL servers are laid out and started, and have not been tested in those editors yet.
 
@@ -68,7 +67,7 @@ Open **AI Account Switcher** in the activity bar.
 
 1. On the Codex tab, click **Enable Codex switching**. After a confirmation, a small marker block is added to `~/.profile` and `~/.bashrc`.
 2. Add an account and sign in the same way as for Claude.
-3. Switch to it. Because Codex reads its account only at startup, the switch takes effect only after the editor's **WSL server restarts**. In Antigravity and VSCodium, PlanSwap restarts it for you: every WSL window disconnects and needs one **Reload Window** click, and integrated terminals close. In other editors you close and reopen the windows yourself (see [Supported editors](#supported-editors)).
+3. Switch to it. Because Codex reads its account only at startup, the switch takes effect only after the editor's **WSL server restarts**. In Antigravity and VSCodium, PlanSwap restarts it for you: every WSL window disconnects and needs one **Reload Window** click, and integrated terminals close. In VS Code you close and reopen the windows yourself (see [Supported editors](#supported-editors)).
 
 ## Language
 

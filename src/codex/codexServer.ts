@@ -11,6 +11,7 @@ const COMMIT_RE = /^[0-9a-f]{40}$/;
 // Whitelist of data dir names directly under $HOME
 const DATA_DIR_KINDS: Record<string, ServerKind> = {
   '.antigravity-ide-server': 'antigravity',
+  '.antigravity-server': 'antigravity', // older Antigravity releases
   '.vscodium-server': 'vscodium',
   '.vscode-server': 'vscode',
 };
@@ -39,10 +40,19 @@ function dataDirOf(root: string): string | undefined {
   return path.basename(bin) === 'bin' ? path.dirname(bin) : undefined;
 }
 
-/** Whitelist mapping; dataDir must be exactly path.join(home, <name>). */
+/** Resolves symlinks when the path exists; otherwise falls back to path.resolve. */
+function realPath(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/** Whitelist mapping; dataDir must be <name> directly under home (symlinks in either path are resolved). */
 export function classifyDataDir(dataDir: string, home: string): ServerKind {
   const name = path.basename(dataDir);
-  if (!Object.hasOwn(DATA_DIR_KINDS, name) || path.resolve(dataDir) !== path.join(path.resolve(home), name)) return 'unknown';
+  if (!Object.hasOwn(DATA_DIR_KINDS, name) || realPath(path.dirname(dataDir)) !== realPath(home)) return 'unknown';
   return DATA_DIR_KINDS[name];
 }
 

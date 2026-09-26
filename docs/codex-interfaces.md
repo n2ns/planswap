@@ -60,7 +60,7 @@ export type ServerKind = 'antigravity' | 'vscodium' | 'vscode' | 'unknown';
 export interface ServerPlan { serverPid: number; children: number[]; commit: string }
 export function parseStatParentPid(statText: string): number;      // field 4 (parent pid) of /proc/<pid>/stat, parsed after the last ')' (comm may contain spaces and parentheses); throws when unparsable
 export function parseServerRoot(argv: string[]): string | undefined; // the path before `/out/server-main.js` (first argument ending with it, suffix stripped); undefined if absent
-export function classifyDataDir(dataDir: string, home: string): ServerKind; // whitelist; dataDir must be exactly path.join(home, <name>): .antigravity-ide-server → 'antigravity', .vscodium-server → 'vscodium', .vscode-server → 'vscode', otherwise 'unknown'
+export function classifyDataDir(dataDir: string, home: string): ServerKind; // whitelist; dataDir must be <name> directly under home (symlinks resolved): .antigravity-ide-server / .antigravity-server → 'antigravity', .vscodium-server → 'vscodium', .vscode-server → 'vscode', otherwise 'unknown'
 export function detectServerKind(): ServerKind;                    // readArgv(process.ppid) → root → dataDir (the parent of root must be named `bin`; dataDir is its parent) → classifyDataDir(dataDir, os.homedir()); never throws, any failure → 'unknown'
 export function canAutoRestart(kind: ServerKind): boolean;         // true only for 'antigravity' and 'vscodium'
 export function readServerCommit(root: string): string;            // top-level `commit` of <root>/product.json; must be 40 lowercase hex, else throws t('server.noCommit')

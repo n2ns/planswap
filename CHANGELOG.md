@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Older Antigravity releases (`~/.antigravity-server`) are recognized as Antigravity.
+- Editor detection no longer falls back to manual instructions when `$HOME` is reached through a symlink.
+
 ## [0.1.1] - 2026-09-26
 
 ### Fixed

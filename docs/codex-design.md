@@ -86,11 +86,11 @@ fi
 
 ## 5. Restarting the WSL-side server
 
-- Editor kind (whitelist, not generic parsing): the server root is the path before `/out/server-main.js` in the argv of `/proc/<ppid>/cmdline` (split on `\0`), its parent directory must be named `bin`, the data directory is the parent of that `bin`, and it must be exactly one of these directories directly under `$HOME`:
+- Editor kind (whitelist, not generic parsing): the server root is the path before `/out/server-main.js` in the argv of `/proc/<ppid>/cmdline` (split on `\0`), its parent directory must be named `bin`, the data directory is the parent of that `bin`, and it must be exactly one of these directories directly under `$HOME` (symlinks in the parent path and in `$HOME` are resolved before comparing):
 
 | Data directory | Kind | Restart |
 |---|---|---|
-| `~/.antigravity-ide-server` | `antigravity` | automatic (pid file) |
+| `~/.antigravity-ide-server`, `~/.antigravity-server` (older releases) | `antigravity` | automatic (pid file) |
 | `~/.vscodium-server` | `vscodium` | automatic (pid file) |
 | `~/.vscode-server` | `vscode` | manual guidance only (reason: section 2 item 13) |
 | anything else, or detection failure | `unknown` | generic manual guidance only |
