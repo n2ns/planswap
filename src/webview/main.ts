@@ -69,6 +69,11 @@ function onClick<T extends HTMLElement>(el: T, fn: (e: MouseEvent) => void): T {
   return el;
 }
 
+// Duplicate names / aliases are compared case-insensitively (mirrors labels.sameName on the host)
+function sameName(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 // Enter / Escape while an IME is composing only confirm or cancel the candidate (keyCode 229 covers older engines)
 function isComposing(e: KeyboardEvent): boolean {
   return e.isComposing || e.keyCode === 229;
@@ -300,7 +305,7 @@ class Page {
     if (!value) return t('validate.labelEmpty');
     if (value.length > MAX_LABEL_LENGTH) return t('validate.labelTooLong', { max: MAX_LABEL_LENGTH });
     if (/[\r\n]/.test(value)) return t('validate.labelNewline');
-    if (this.tab.accounts.some((a) => a.dir !== self.dir && (a.name === value || a.label === value))) return t('validate.labelDuplicate');
+    if (this.tab.accounts.some((a) => a.dir !== self.dir && (sameName(a.name, value) || sameName(a.label, value)))) return t('validate.labelDuplicate');
     return undefined;
   }
 
@@ -333,8 +338,8 @@ class Page {
   private validateName(name: string): string | undefined {
     if (!name) return undefined;
     if (!NAME_RE.test(name)) return t('validate.nameChars');
-    if (name === 'default') return t('validate.nameReserved');
-    if (this.tab.accounts.some((a) => a.name === name || a.label === name)) return t('validate.nameExists');
+    if (sameName(name, 'default')) return t('validate.nameReserved');
+    if (this.tab.accounts.some((a) => sameName(a.name, name) || sameName(a.label, name))) return t('validate.nameExists');
     return undefined;
   }
 

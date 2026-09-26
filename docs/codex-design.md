@@ -59,7 +59,7 @@ An account is a directory:
 | Account | Directory | Notes |
 |---|---|---|
 | default | `~/.codex` | Always exists, cannot be removed; effective when the state file is empty |
-| `<name>` | `~/.codex-<name>` | Created with "Add account", or registered automatically by scanning `~/.codex-*` on activation |
+| `<name>` | `~/.codex-<name>` | Created with "Add account", or registered automatically by scanning `~/.codex-*` on activation and refresh (a name equal to a registered name or display name, ignoring case, is skipped); an entry whose directory no longer exists is removed at the same time (its alias is cleared) |
 
 ## 4. Login shell configuration
 
@@ -130,7 +130,7 @@ fi
 - `globalState`:
   - `codex.accounts`: `Array<{ name, dir }>`, the list of non-default accounts.
   - `codex.ignoredDirs`: directories of accounts removed while keeping the directory; automatic scanning skips them.
-  - `codex.labels`: per-account display names (aliases), `Record<string /*name*/, string /*label*/>`, keyed by account name; no entry means not set (the name is shown). Stored and validated by the `LabelStore` in `labels.ts` with the same rules as on the Claude side (see design.md section 4): every named account can have an alias, the default account and the external-directory row cannot; must not equal the name or label of another Codex account; display-only, the directory does not change; when adding an account the name must not equal the name or label of any Codex account; removing an account clears its alias. Independent of `claude.labels`; the same name is allowed on both sides.
+  - `codex.labels`: per-account display names (aliases), `Record<string /*name*/, string /*label*/>`, keyed by account name; no entry means not set (the name is shown). Stored and validated by the `LabelStore` in `labels.ts` with the same rules as on the Claude side (see design.md section 4): every named account can have an alias, the default account and the external-directory row cannot; must not equal the name or label of another Codex account; display-only, the directory does not change; when adding an account the name must not equal the name or label of any Codex account (compared case-insensitively); removing an account clears its alias. Independent of `claude.labels`; the same name is allowed on both sides.
 - The selected account is whatever the state file says (shared across windows, the last writer wins).
 - The directory actually effective in this window = the extension host's own `process.env.CODEX_HOME`, or `~/.codex` when empty. With remote type `wsl` the Codex extension does not rewrite it. The panel marks it as "current"; when it differs from the state file, "X selected; takes effect after restarting the server" is shown (X is the display name; an unregistered directory shows its path).
 - Signed-in state: whether `<dir>/auth.json` exists.

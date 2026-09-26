@@ -18,6 +18,12 @@
 - Missing shared entries are created empty in `~/.claude` / `~/.codex` as link targets, and sharing an account moves its files there. Existing files of the default account are never overwritten.
 - The `default` account can no longer be renamed on either tab; it is always shown as `default`, and an alias set earlier is ignored.
 
+### Fixed
+
+- An account whose directory was deleted or renamed outside the extension no longer stays in the list as a "Not logged in" row: it is removed, together with its alias, at startup and on refresh (Claude and Codex).
+- Account names and aliases are checked for duplicates case-insensitively: `Work` can no longer be added or used as an alias next to `work`, and auto-discovery no longer registers `~/.claude-work` / `~/.codex-work` as a second account when `Work` exists.
+- Claude: switching to an account whose directory does not exist is refused with an error, as it already was for Codex.
+
 ## [0.1.2] - 2026-09-26
 
 ### Fixed

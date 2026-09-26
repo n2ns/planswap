@@ -40,6 +40,13 @@ describe('validateName (Codex)', () => {
     assert.equal(validateName('work', store, labels), t('name.dupLabel'));
   });
 
+  test('the default name, existing names and display names are compared ignoring case', async () => {
+    const { store, labels } = await make();
+    assert.equal(validateName('Default', store, labels), t('name.reserved', { name: 'default' }));
+    assert.equal(validateName('A', store, labels), t('name.exists'));
+    assert.equal(validateName('WORK', store, labels), t('name.dupLabel'));
+  });
+
   test('a name whose directory resolves to ~/.codex is rejected', async () => {
     const { store, labels } = await make();
     const def = path.join(home, '.codex');

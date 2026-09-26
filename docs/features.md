@@ -9,7 +9,8 @@ This document describes the extension's behavior feature by feature. The impleme
 | `default` | `~/.claude`; if the extension host environment already has `CLAUDE_CONFIG_DIR`, that value wins | Always exists, cannot be removed |
 | `<name>` | `~/.claude-<name>` | Created with "Add account", or registered by auto-discovery |
 
-- The account list is stored in the extension's `globalState` under the `accounts` key; only non-default accounts (`{ name, dir }`) are stored, and the default account is always prepended at runtime.
+- The account list is stored in the extension's `globalState` under the `accounts` key; only non-default accounts (`{ name, dir }`) are stored, and the default account is always prepended at runtime. A named account whose directory no longer exists (deleted or renamed outside the extension) is removed from the list on activation and on refresh (see section 5).
+- Account names and display names are compared **ignoring case** when checking for duplicates (`Work` and `work` clash); accounts registered before this rule are left as they are.
 - The **current account** is determined solely by the `CLAUDE_CONFIG_DIR` entry in `claudeCode.environmentVariables`:
   - Both the array form `[{ "name": ..., "value": ... }]` and the object form `{ "KEY": value }` are accepted; non-string values are converted to strings; an empty string counts as no entry.
   - No entry → the current account is the default account.
@@ -132,7 +133,7 @@ After clicking the pencil icon of a named account row, the row's name turns into
   - equals the external-directory name (in either language): "Cannot use the reserved name <value>";
   - same as the account name of another account on this page: "Same as an existing account name";
   - same as the display name of another account on this page: "Same as an existing account's display name".
-  The account itself is excluded from the checks, so entering its own account name or current alias passes; the same name is allowed across the Claude and Codex pages.
+  Both duplicate checks ignore case. The account itself is excluded from the checks, so entering its own account name or current alias passes; the same name is allowed across the Claude and Codex pages.
 - When valid, the alias is written to `globalState` by account name (entering the account's own name clears the alias), the panel and the status bar are refreshed, and edit state ends; the list, the status bar and the QuickPick show the new alias right away.
 - The directory and internal name do not change; the `default` row still cannot be removed.
 
@@ -156,7 +157,7 @@ Entry points:
 
 Flow:
 
-1. The target already is the current account → return without doing anything.
+1. The target already is the current account → return without doing anything. A named target whose directory does not exist → error "Account directory does not exist: <dir>", nothing is changed.
    When the target is a shared account, its links are first re-created or repaired and the default account's `.claude.json` is mirrored into it (as "Sync shared" does, see section 5); anything that needs attention (entries kept as the account's own, entries not shared for safety, errors) only shows the warning "Re-linking X to the default account reported: …", and the switch still happens.
 2. Read `claudeCode.environmentVariables` and build a **new array**: keep all other entries, remove every `CLAUDE_CONFIG_DIR` entry; when the target is not the default account, append `{ "name": "CLAUDE_CONFIG_DIR", "value": "<absolute path>" }`. The path contains no `~` and no trailing slash. When the original value is in object form, it is written back as an array.
 3. Write with `ConfigurationTarget.Global`. In a WSL window this writes to the WSL remote Machine settings.
@@ -177,6 +178,7 @@ Flow:
    - only letters, digits, underscores and hyphens (`^[A-Za-z0-9_-]+$`);
    - the reserved name `default` cannot be used;
    - must not equal the account name or display name of an account already in the list.
+   The reserved-name and duplicate checks ignore case.
 2. After submission the extension validates the name with leading/trailing whitespace removed once more (the extension is authoritative); on failure the reason is shown in the help line:
    - empty: "Enter an account name";
    - invalid characters: "Only letters, digits, underscores and hyphens are allowed";
@@ -184,6 +186,7 @@ Flow:
    - same as a registered account: "An account with this name already exists";
    - same as the current display name of any account on this page: "Same as an existing account's display name";
    - its directory is the same as the default directory: "This account directory is the same as the default account directory".
+   The `default`, existing-name and display-name checks ignore case (`Default`, `WORK` for an account `work`).
 3. The directory `~/.claude-<name>` is created (mode 0700) if it does not exist; an existing one is reused as is, without clearing.
 4. Depending on the checkbox (see "Shared and independent accounts" in section 5):
    - **shared** (checked): every shared entry is linked to the default directory (missing entries are first created empty in the default directory) and the default account's `.claude.json` is mirrored into `<new dir>/.claude.json`; when something could not be linked, the warning "Account X was created and shared, but: …" lists it;
@@ -236,7 +239,7 @@ Prerequisite: a `claude` command on PATH.
 
 ### 4.5 Refresh `aiSwitcher.refresh`
 
-Entry points: the `$(refresh)` title bar button, the Command Palette. Scans the home directory and registers unregistered `~/.claude-*` directories (rules in section 5), re-reads each account directory's email, plan and sign-in state, redraws the panel and updates the status bar.
+Entry points: the `$(refresh)` title bar button, the Command Palette. Removes accounts whose directory no longer exists and registers unregistered `~/.claude-*` directories (rules in section 5), re-reads each account directory's email, plan and sign-in state, redraws the panel and updates the status bar.
 
 ### 4.6 Share an independent account
 
@@ -258,13 +261,15 @@ Entry point: the `link` button "Share with the default account" of an independen
 
 ### Auto-discovery of `~/.claude-*`
 
-On activation and on refresh the home directory is scanned; a directory that meets all of the following conditions and is not in the account list is registered automatically:
+On activation and on refresh, named accounts whose directory no longer exists are first removed from the list and their alias is cleared; they are not added to the ignore list, so a directory recreated later is discovered again. The default account is never removed.
+
+Then the home directory is scanned; a directory that meets all of the following conditions and is not in the account list is registered automatically:
 
 - the basename matches `^\.claude-[A-Za-z0-9_-]+$`;
 - it is a real directory, not a symlink;
 - it is not the default directory (compared after resolving symlinks);
 - it is not in the ignore list (directories kept when removing an account go into the ignore list);
-- its name does not equal the display name (alias) of an existing account; such a directory is skipped until the conflicting alias is changed.
+- its name does not equal, ignoring case, the name or display name (alias) of an existing account (including `default`); such a directory is skipped until the conflict is gone (e.g. `~/.claude-xiaoni` is skipped while `Xiaoni` is registered). Of two scanned directories whose names differ only in case, only the first one found is registered.
 
 The account name is the basename without the `.claude-` prefix. This keeps the list from becoming empty when `globalState` is lost and also adopts manually created directories.
 
@@ -369,7 +374,7 @@ If the Codex part fails to initialize on activation (e.g. an rc file is unreadab
 | `default` | `~/.codex` (fixed, ignores environment variables) | Always exists, cannot be removed; effective when the state file is empty |
 | `<name>` | `~/.codex-<name>` | Created with "Add account", or registered by auto-discovery (same rules as section 5, basename matches `^\.codex-[A-Za-z0-9_-]+$`) |
 
-- The account list is stored in `globalState` `codex.accounts`, the ignore list in `codex.ignoredDirs`, with the same semantics as on the Claude side (auto-discovery also skips a name equal to the display name of an existing Codex account; a deleted directory leaves the ignore list).
+- The account list is stored in `globalState` `codex.accounts`, the ignore list in `codex.ignoredDirs`, with the same semantics as on the Claude side (entries whose directory no longer exists are pruned on activation and refresh and their alias is cleared; auto-discovery skips a name equal, ignoring case, to the name or display name of an existing Codex account; a deleted directory leaves the ignore list). Account names and display names are compared ignoring case when checking for duplicates.
 - The **selected account** is whatever the state file `~/.config/ai-switcher/codex-home` says (content is the absolute path of the directory, empty means the default account; shared across windows, the last writer wins).
 - The **directory effective in this window** = the extension host's own `process.env.CODEX_HOME`, or `~/.codex` when empty. The panel marks it as "current". When the effective directory does not correspond to any registered account, an "External directory" row is appended to the list and marked current.
 - Signed-in state: whether `<dir>/auth.json` exists.
@@ -442,7 +447,7 @@ While another switch is in progress (e.g. its confirmation is still open), a fur
 
 ### 10.7 Add
 
-1. Name validation as in 4.2 (`^[A-Za-z0-9_-]+$`, not `default`, not equal to the account name or display name of any account on the Codex page, `~/.codex-<name>` not equal to `~/.codex` after resolving symlinks).
+1. Name validation as in 4.2 (`^[A-Za-z0-9_-]+$`, not `default`, not equal to the account name or display name of any account on the Codex page, all ignoring case, `~/.codex-<name>` not equal to `~/.codex` after resolving symlinks).
 2. Create `~/.codex-<name>` (0700; reused if it exists). When this fails, the help line shows "Failed to create account directory: <reason>" and nothing is registered.
 3. Depending on the shared checkbox (see 10.12):
    - **shared** (checked): every shared entry is linked to `~/.codex` (missing entries are first created empty there); when something could not be linked, the warning "Account X was created and shared, but: …" lists it (e.g. "not shared for safety: config.toml" when the default `config.toml` sets a login-related key);

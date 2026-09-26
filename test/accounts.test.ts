@@ -93,12 +93,14 @@ describe('AccountStore syncWithDisk', () => {
     const { memento, store } = make();
     await memento.update('ignoredDirs', [path.join(home, '.claude-b')]);
     // Same name registered under another directory, and same directory registered under another name
-    await store.add({ name: 'c', dir: '/elsewhere' });
+    const elsewhere = path.join(home, 'elsewhere-c');
+    fs.mkdirSync(elsewhere);
+    await store.add({ name: 'c', dir: elsewhere });
     await store.add({ name: 'renamed', dir: path.join(home, '.claude-d') });
     await store.syncWithDisk();
     assert.deepEqual(store.named(), [
       { name: 'a', dir: path.join(home, '.claude-a') },
-      { name: 'c', dir: '/elsewhere' },
+      { name: 'c', dir: elsewhere },
       { name: 'renamed', dir: path.join(home, '.claude-d') },
     ]);
   });
@@ -115,6 +117,7 @@ describe('AccountStore syncWithDisk', () => {
     const { memento, store } = make();
     const labels = new LabelStore(memento, 'claude.labels');
     const a = { name: 'a', dir: path.join(home, 'elsewhere-a') };
+    fs.mkdirSync(a.dir);
     await store.add(a);
     await labels.set('a', 'work');
     await store.syncWithDisk(labels);
@@ -122,5 +125,57 @@ describe('AccountStore syncWithDisk', () => {
     await labels.set('a', undefined);
     await store.syncWithDisk(labels);
     assert.deepEqual(store.named(), [a, { name: 'work', dir }]);
+  });
+
+  test('skips scanned names that match a registered name or display name case-insensitively', async () => {
+    for (const n of ['xiaoni', 'WORK', 'Default', 'fresh']) fs.mkdirSync(path.join(home, `.claude-${n}`));
+    const { memento, store } = make();
+    const labels = new LabelStore(memento, 'claude.labels');
+    const x = { name: 'Xiaoni', dir: path.join(home, 'elsewhere-x') };
+    const a = { name: 'a', dir: path.join(home, 'elsewhere-a') };
+    for (const e of [x, a]) {
+      fs.mkdirSync(e.dir);
+      await store.add(e);
+    }
+    await labels.set('a', 'work');
+    await store.syncWithDisk(labels);
+    assert.deepEqual(store.named(), [x, a, { name: 'fresh', dir: path.join(home, '.claude-fresh') }]);
+  });
+
+  test('registers only one of two scanned directories whose names differ only in case', async () => {
+    for (const n of ['foo', 'Foo']) fs.mkdirSync(path.join(home, `.claude-${n}`));
+    const { store } = make();
+    await store.syncWithDisk();
+    assert.equal(store.named().length, 1);
+    assert.ok(['foo', 'Foo'].includes(store.named()[0].name));
+  });
+
+  test('prunes entries whose directory is gone, clears their alias and does not ignore the directory', async () => {
+    const kept = { name: 'kept', dir: path.join(home, '.claude-kept') };
+    const gone = { name: 'gone', dir: path.join(home, '.claude-gone') };
+    fs.mkdirSync(kept.dir);
+    const { memento, store } = make();
+    const labels = new LabelStore(memento, 'claude.labels');
+    await store.add(kept);
+    await store.add(gone);
+    await labels.set('kept', 'k');
+    await labels.set('gone', 'g');
+    await store.syncWithDisk(labels);
+    assert.deepEqual(store.named(), [kept]);
+    assert.equal(labels.get('gone'), undefined);
+    assert.equal(labels.get('kept'), 'k');
+    assert.deepEqual(memento.get('ignoredDirs'), []);
+    // A recreated directory is discovered again
+    fs.mkdirSync(gone.dir);
+    await store.syncWithDisk(labels);
+    assert.deepEqual(store.named(), [gone, kept]);
+  });
+
+  test('pruning works without a LabelStore and frees the name for a scanned directory', async () => {
+    const { store } = make();
+    await store.add({ name: 'Foo', dir: path.join(home, 'moved-away') });
+    fs.mkdirSync(path.join(home, '.claude-foo'));
+    await store.syncWithDisk();
+    assert.deepEqual(store.named(), [{ name: 'foo', dir: path.join(home, '.claude-foo') }]);
   });
 });

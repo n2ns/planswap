@@ -59,7 +59,7 @@ An account is a directory:
 ## 4. Data model
 
 - The account list is stored in the extension's `globalState` under the key `accounts`, value `Array<{ name: string; dir: string }>`. The default account is not stored; it is prepended at runtime.
-- On activation and on refresh, `~/.claude-*` directories are scanned (basename matches `^\.claude-[A-Za-z0-9_-]+$`, a real directory and not a symlink, and not pointing to the default directory after resolving symlinks); those not in the list are added automatically, so the list is not empty if globalState is lost.
+- On activation and on refresh, `~/.claude-*` directories are scanned (basename matches `^\.claude-[A-Za-z0-9_-]+$`, a real directory and not a symlink, and not pointing to the default directory after resolving symlinks); those not in the list are added automatically, so the list is not empty if globalState is lost. A directory whose name equals, ignoring case, the name or display name of a registered account (including `default`) is skipped. Before scanning, named entries whose directory no longer exists are removed from the list and their alias is cleared (not added to `ignoredDirs`).
 - The `globalState` key `ignoredDirs` records directories of accounts that were removed while keeping their directory; automatic scanning skips them; adding an account with the same name again removes it from the ignore list.
 - The single source of truth for the current account is the `CLAUDE_CONFIG_DIR` entry in `claudeCode.environmentVariables`:
   - Reading accepts both the array and the object form; non-string values are converted to strings; an empty `value` counts as no entry.
@@ -180,6 +180,7 @@ Each QuickPick item shows the display name (the alias for accounts that have one
 Entry points: the row's switch button in the panel, double-clicking a non-current row, focusing a non-current row and pressing Enter, the Command Palette.
 
 1. If the target already is the current account, return immediately (the panel's current row offers no switch, and the QuickPick does not list the current account).
+   If the target is a named account whose directory does not exist, show the error "Account directory does not exist: <dir>" and return without switching.
    If the target is a shared account (`isSharedClaudeAccount`), `ensureClaudeLinks` and `mirrorClaudeJson` run first (6.7); a non-empty report or an error only shows the warning "Re-linking X to the default account reported: …", and the switch continues.
 2. Read `claudeCode.environmentVariables` and build a new array (never mutate the value returned by `get()`): keep other entries, remove all entries with `name === "CLAUDE_CONFIG_DIR"`; if the target is not the default account, append `{ name: "CLAUDE_CONFIG_DIR", value: <absolute path> }`. Paths use `path.resolve`, no trailing slash, no `~`. If the original value is in object form, write it back as an array.
 3. `await config.update(key, next, ConfigurationTarget.Global)`, wrapped in try/catch; on failure show the error "Switch failed. Possible causes: the official Claude Code extension is not installed on the WSL side, or the remote settings.json has a syntax error. Original error: <error>".
@@ -190,7 +191,7 @@ Entry points: the row's switch button in the panel, double-clicking a non-curren
 ### 6.2 Add
 
 1. Entry point: the always-present input at the bottom of the panel. The Command Palette's `aiSwitcher.addAccount` only focuses that input: `panel.focusAdd('claude')` runs `aiSwitcher.accounts.focus` to open the panel and then sends `focusAdd` to the frontend (the frontend switches to the Claude tab and focuses the input).
-2. Live frontend validation (immediate hints, not authoritative): matches `^[A-Za-z0-9_-]+$`; not equal to `default`; not equal to the `name` or `label` of an account row currently shown. An empty input shows no error, it only disables the button.
+2. Live frontend validation (immediate hints, not authoritative): matches `^[A-Za-z0-9_-]+$`; not equal to `default`; not equal to the `name` or `label` of an account row currently shown (both comparisons ignore case). An empty input shows no error, it only disables the button.
 3. The frontend submits an `add` message; the extension performs the authoritative validation on the trimmed name and sends the reason back to the panel on failure:
    - empty: "Enter an account name";
    - does not match `^[A-Za-z0-9_-]+$`: "Only letters, digits, underscores and hyphens are allowed";
@@ -198,6 +199,7 @@ Entry points: the row's switch button in the panel, double-clicking a non-curren
    - same as a registered account: "An account with this name already exists";
    - equals the current alias of any account of the same vendor: "Same as an existing account's display name";
    - its directory is the same as the default directory: "This account directory is the same as the default account directory".
+   The `default`, existing-name and alias comparisons ignore case (`sameName` in `labels.ts`).
 4. Directory `~/.claude-<name>`: created (mode 0700) if it does not exist; reused as is, without clearing, if it exists.
 5. Depending on `shared` (the checkbox; a missing value counts as shared), see 6.7:
    - shared: `ensureClaudeLinks(dir)`, then `mirrorClaudeJson(claudeJsonPath(defaultDir(), isExplicitConfigDir(defaultDir())), dir)`; a non-empty report is shown as the warning "Account X was created and shared, but: …";
@@ -234,7 +236,7 @@ Entry points: the row's terminal button in the panel (every row, including the e
 Entry point: the pencil icon of a named account row in the panel; after typing inline, Enter submits `rename` (with `mode`, `dir`, `label`; there is no Command Palette entry).
 
 1. The extension looks up the row with `panel.resolve('claude', dir)`; if not found or `kind !== 'named'`, the message is ignored (the default row and the external-directory row cannot be renamed).
-2. `labels.validate(label, account.name, existing)`, where `existing` is `store.all()` mapped to `{ name, label: labelFor(name, labels) }`: empty after trim → "Enter a display name"; more than 32 characters → "Display name can be at most 32 characters"; contains a line break → "Display name cannot contain line breaks"; equals the external-directory name → "Cannot use the reserved name <value>"; same as the name of another account of the same vendor → "Same as an existing account name"; same as the label of another account of the same vendor → "Same as an existing account's display name" (the account itself is excluded from the comparison). On error, `post({ type: 'renameResult', mode, dir, error })` and the frontend shows it in red inline.
+2. `labels.validate(label, account.name, existing)`, where `existing` is `store.all()` mapped to `{ name, label: labelFor(name, labels) }`: empty after trim → "Enter a display name"; more than 32 characters → "Display name can be at most 32 characters"; contains a line break → "Display name cannot contain line breaks"; equals the external-directory name → "Cannot use the reserved name <value>"; same as the name of another account of the same vendor → "Same as an existing account name"; same as the label of another account of the same vendor → "Same as an existing account's display name" (both duplicate checks ignore case; the account itself is excluded from the comparison). On error, `post({ type: 'renameResult', mode, dir, error })` and the frontend shows it in red inline.
 3. If valid, `labels.set(account.name, <trimmed value>)`; when the value equals the account's own name, the entry is deleted (alias cleared).
 4. Refresh the panel and the status bar, `post({ type: 'renameResult', mode, dir })`, and the frontend leaves edit state.
 5. Directory, internal name and `CLAUDE_CONFIG_DIR` do not change; the alias only affects display. The same alias is allowed across Claude and Codex.

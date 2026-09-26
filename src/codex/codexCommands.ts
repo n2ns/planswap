@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { NAME_RE, samePath, sameRealPath } from '../paths';
 import { shQuote } from '../commands';
 import { type AccountsPanel, type PanelSource, tildify } from '../accountsPanel';
-import { labelFor, type LabelStore, EXTERNAL_NAME } from '../labels';
+import { labelFor, sameName, type LabelStore, EXTERNAL_NAME } from '../labels';
 import type { AccountView, FromWebview } from '../protocol';
 import {
   CODEX_DEFAULT_NAME,
@@ -488,9 +488,9 @@ export function registerCodexCommands(deps: CodexDeps): vscode.Disposable[] {
 export function validateName(name: string, store: CodexAccountStore, labels: LabelStore): string | undefined {
   if (!name) return t('name.empty');
   if (!NAME_RE.test(name)) return t('name.invalid');
-  if (name === CODEX_DEFAULT_NAME) return t('name.reserved', { name: CODEX_DEFAULT_NAME });
-  if (store.find(name)) return t('name.exists');
-  if (store.all().some((a) => labelFor(a.name, labels) === name)) return t('name.dupLabel');
+  if (sameName(name, CODEX_DEFAULT_NAME)) return t('name.reserved', { name: CODEX_DEFAULT_NAME });
+  if (store.all().some((a) => sameName(a.name, name))) return t('name.exists');
+  if (store.all().some((a) => sameName(labelFor(a.name, labels), name))) return t('name.dupLabel');
   if (sameRealPath(codexAccountDir(name), codexDefaultDir())) return t('name.sameAsDefaultDir');
   return undefined;
 }

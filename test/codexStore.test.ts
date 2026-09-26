@@ -69,6 +69,7 @@ describe('CodexAccountStore', () => {
     const store = new CodexAccountStore(memento);
     const labels = new LabelStore(memento, 'codex.labels');
     const a = { name: 'a', dir: path.join(home, 'elsewhere-a') };
+    fs.mkdirSync(a.dir);
     await store.add(a);
     await labels.set('a', 'work');
     await store.syncWithDisk(labels);
@@ -77,4 +78,60 @@ describe('CodexAccountStore', () => {
     await store.syncWithDisk(labels);
     assert.deepEqual(store.named(), [a, { name: 'work', dir }]);
     fs.rmSync(dir, { recursive: true });
-  });});
+    fs.rmSync(a.dir, { recursive: true });
+  });
+
+  test('syncWithDisk prunes entries whose directory is gone, clears their alias and does not ignore the directory', async () => {
+    const kept = path.join(home, '.codex-kept');
+    fs.mkdirSync(kept);
+    const memento = new MemoryMemento();
+    const store = new CodexAccountStore(memento);
+    const labels = new LabelStore(memento, 'codex.labels');
+    const gone = { name: 'gone', dir: path.join(home, '.codex-gone') };
+    await store.add(gone);
+    await store.add({ name: 'kept', dir: kept });
+    await labels.set('gone', 'old-alias');
+    await labels.set('kept', 'kept-alias');
+    await store.syncWithDisk(labels);
+    assert.deepEqual(store.named(), [{ name: 'kept', dir: kept }]);
+    assert.equal(labels.get('gone'), undefined);
+    assert.equal(labels.get('kept'), 'kept-alias');
+    assert.deepEqual(memento.get('codex.ignoredDirs'), []);
+    // A recreated directory is discovered again
+    fs.mkdirSync(gone.dir);
+    await store.syncWithDisk(labels);
+    assert.deepEqual(store.named(), [gone, { name: 'kept', dir: kept }]);
+    fs.rmSync(gone.dir, { recursive: true });
+    fs.rmSync(kept, { recursive: true });
+  });
+
+  test('syncWithDisk skips scanned names equal to a registered name or display name ignoring case', async () => {
+    const foo = path.join(home, '.codex-foo');
+    const work = path.join(home, '.codex-WORK');
+    const def = path.join(home, '.codex-Default');
+    for (const d of [foo, work, def]) fs.mkdirSync(d);
+    const memento = new MemoryMemento();
+    const store = new CodexAccountStore(memento);
+    const labels = new LabelStore(memento, 'codex.labels');
+    const upper = { name: 'Foo', dir: path.join(home, 'elsewhere-foo') };
+    const b = { name: 'b', dir: path.join(home, 'elsewhere-b') };
+    fs.mkdirSync(upper.dir);
+    fs.mkdirSync(b.dir);
+    await store.add(upper);
+    await store.add(b);
+    await labels.set('b', 'Work');
+    await store.syncWithDisk(labels);
+    assert.deepEqual(store.named(), [upper, b]);
+    for (const d of [foo, work, def, upper.dir, b.dir]) fs.rmSync(d, { recursive: true });
+  });
+
+  test('syncWithDisk registers only one of two scanned directories whose names differ only in case', async () => {
+    const dirs = ['foo', 'Foo'].map((n) => path.join(home, `.codex-${n}`));
+    for (const d of dirs) fs.mkdirSync(d);
+    const store = new CodexAccountStore(new MemoryMemento());
+    await store.syncWithDisk();
+    assert.equal(store.named().length, 1);
+    assert.ok(['foo', 'Foo'].includes(store.named()[0].name));
+    for (const d of dirs) fs.rmSync(d, { recursive: true });
+  });
+});

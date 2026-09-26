@@ -1,6 +1,7 @@
+import * as fs from 'node:fs';
 import type { Memento } from 'vscode';
 import { samePath } from '../paths';
-import { labelFor, type LabelStore } from '../labels';
+import { labelFor, sameName, type LabelStore } from '../labels';
 import type { CodexAccount } from './codexPaths';
 import { CODEX_DEFAULT_NAME, codexDefaultDir, scanCodexDirs } from './codexPaths';
 
@@ -59,17 +60,24 @@ export class CodexAccountStore {
     await this.state.update(IGNORED_KEY, this.ignored().filter((d) => !samePath(d, dir)));
   }
 
-  // labels: scanned names equal to an existing account's display name are skipped until that alias changes
+  // Prunes named entries whose directory no longer exists (alias cleared, not added to the ignore list), then
+  // registers scanned directories; a scanned name equal (case-insensitively) to a remaining account's name or,
+  // with labels, display name is skipped until that alias changes
   async syncWithDisk(labels?: LabelStore): Promise<void> {
-    const list = this.load();
+    const stored = this.load();
+    const list = stored.filter((a) => fs.existsSync(a.dir));
+    for (const a of stored) if (!list.includes(a)) await labels?.remove(a.name);
     const ignored = this.ignored();
-    const taken = labels ? this.all().map((a) => labelFor(a.name, labels)) : [];
-    const missing = scanCodexDirs().filter(
-      (s) =>
-        !ignored.some((d) => samePath(d, s.dir)) &&
-        !list.some((a) => a.name === s.name || samePath(a.dir, s.dir)) &&
-        !taken.includes(s.name),
-    );
-    if (missing.length) await this.save([...list, ...missing]);
+    const taken = [CODEX_DEFAULT_NAME, ...list.map((a) => a.name)];
+    if (labels) taken.push(...list.map((a) => labelFor(a.name, labels)));
+    const missing: CodexAccount[] = [];
+    for (const s of scanCodexDirs()) {
+      if (ignored.some((d) => samePath(d, s.dir)) || list.some((a) => samePath(a.dir, s.dir))) continue;
+      if (taken.some((n) => sameName(n, s.name))) continue;
+      // Also reserves the name against another scanned directory differing only in case
+      taken.push(s.name);
+      missing.push(s);
+    }
+    if (missing.length || list.length !== stored.length) await this.save([...list, ...missing]);
   }
 }

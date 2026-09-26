@@ -122,6 +122,12 @@ describe('validate', () => {
     assert.equal(store.validate('test1', 'main', existing), 'Same as an existing account name');
     assert.equal(store.validate('work', 'test1', existing), "Same as an existing account's display name");
   });
+  test('duplicates are compared case-insensitively; the account itself is still excluded', () => {
+    assert.equal(store.validate('TEST1', 'main', existing), 'Same as an existing account name');
+    assert.equal(store.validate('Work', 'test1', existing), "Same as an existing account's display name");
+    assert.equal(store.validate('WORK', 'main', existing), undefined);
+    assert.equal(store.validate('Main', 'main', existing), undefined);
+  });
 });
 
 describe('labelFor', () => {

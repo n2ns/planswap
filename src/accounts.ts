@@ -1,7 +1,8 @@
+import * as fs from 'node:fs';
 import type { Memento } from 'vscode';
 import type { Account } from './paths';
 import { DEFAULT_NAME, defaultDir, samePath, scanAccountDirs } from './paths';
-import { labelFor, type LabelStore } from './labels';
+import { labelFor, sameName, type LabelStore } from './labels';
 
 const STATE_KEY = 'accounts';
 // Accounts deleted but whose directories were kept; skipped by the auto scan
@@ -58,17 +59,27 @@ export class AccountStore {
     await this.state.update(IGNORED_KEY, this.ignored().filter((d) => !samePath(d, dir)));
   }
 
-  // labels: scanned names equal to an existing account's display name are skipped until that alias changes
+  /**
+   * Prunes named entries whose directory no longer exists (their alias is cleared through labels; they are not
+   * added to ignoredDirs), then registers scanned directories that are not ignored, not already registered by
+   * directory, and whose name does not match (case-insensitively) a remaining account's name or display name.
+   * Saves only when something changed
+   */
   async syncWithDisk(labels?: LabelStore): Promise<void> {
-    const list = this.load();
+    const stored = this.load();
+    const pruned = stored.filter((a) => a.name !== DEFAULT_NAME && !fs.existsSync(a.dir));
+    for (const a of pruned) await labels?.remove(a.name);
+    const list = stored.filter((a) => !pruned.includes(a));
     const ignored = this.ignored();
-    const taken = labels ? this.all().map((a) => labelFor(a.name, labels)) : [];
-    const missing = scanAccountDirs().filter(
-      (s) =>
-        !ignored.some((d) => samePath(d, s.dir)) &&
-        !list.some((a) => a.name === s.name || samePath(a.dir, s.dir)) &&
-        !taken.includes(s.name),
-    );
-    if (missing.length) await this.save([...list, ...missing]);
+    const taken = [DEFAULT_NAME, ...list.map((a) => a.name), ...(labels ? list.map((a) => labelFor(a.name, labels)) : [])];
+    const missing: Account[] = [];
+    for (const s of scanAccountDirs()) {
+      if (ignored.some((d) => samePath(d, s.dir)) || list.some((a) => samePath(a.dir, s.dir))) continue;
+      if (taken.some((n) => sameName(n, s.name))) continue;
+      // Also reserves the name against another scanned directory differing only in case
+      taken.push(s.name);
+      missing.push(s);
+    }
+    if (pruned.length || missing.length) await this.save([...list, ...missing]);
   }
 }

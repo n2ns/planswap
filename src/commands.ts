@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import {
   DEFAULT_NAME,
@@ -25,7 +26,7 @@ import { currentDir, isExplicitConfigDir, setConfigDir } from './claudeSettings'
 import type { AccountStore } from './accounts';
 import type { AccountsPanel } from './accountsPanel';
 import type { StatusBar } from './statusBar';
-import { labelFor, type LabelStore, EXTERNAL_NAME } from './labels';
+import { labelFor, sameName, type LabelStore, EXTERNAL_NAME } from './labels';
 import type { FromWebview } from './protocol';
 import type { CodexAccountStore } from './codex/codexStore';
 import { runTool, type ToolDeps } from './tools';
@@ -88,6 +89,10 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
 
   async function switchTo(account: Account): Promise<boolean> {
     if (isCurrent(account)) return true;
+    if (account.name !== DEFAULT_NAME && !fs.existsSync(account.dir)) {
+      void vscode.window.showErrorMessage(t('account.dirMissing', { dir: account.dir }));
+      return false;
+    }
     // A shared account is re-linked and mirrored first; a problem only warns, the switch still happens
     if (account.name !== DEFAULT_NAME && isSharedClaudeAccount(account.dir)) {
       const warning = refreshShared(account);
@@ -315,13 +320,13 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
   ];
 }
 
-// Name check for a new Claude account; only Claude accounts are compared
+// Name check for a new Claude account; only Claude accounts are compared, case-insensitively
 export function validateName(name: string, store: AccountStore, labels: LabelStore): string | undefined {
   if (!name) return t('name.empty');
   if (!NAME_RE.test(name)) return t('name.invalid');
-  if (name === DEFAULT_NAME) return t('name.reserved', { name: DEFAULT_NAME });
-  if (store.find(name)) return t('name.exists');
-  if (store.all().some((a) => labelFor(a.name, labels) === name)) return t('name.dupLabel');
+  if (sameName(name, DEFAULT_NAME)) return t('name.reserved', { name: DEFAULT_NAME });
+  if (store.all().some((a) => sameName(a.name, name))) return t('name.exists');
+  if (store.all().some((a) => sameName(labelFor(a.name, labels), name))) return t('name.dupLabel');
   if (sameRealPath(accountDir(name), defaultDir())) return t('name.sameAsDefaultDir');
   return undefined;
 }

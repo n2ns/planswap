@@ -41,6 +41,13 @@ describe('validateName', () => {
     assert.equal(validateName('work', store, labels), t('name.dupLabel'));
   });
 
+  test('the default name, existing names and display names are compared case-insensitively', async () => {
+    const { store, labels } = await make();
+    assert.equal(validateName('Default', store, labels), t('name.reserved', { name: 'default' }));
+    assert.equal(validateName('A', store, labels), t('name.exists'));
+    assert.equal(validateName('WORK', store, labels), t('name.dupLabel'));
+  });
+
   test('a name whose directory is the default directory (via CLAUDE_CONFIG_DIR) is rejected', async () => {
     const { store, labels } = await make();
     const dir = path.join(home, '.claude-main');

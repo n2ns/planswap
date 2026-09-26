@@ -40,7 +40,7 @@ export class LabelStore {
   /**
    * Returns an error message, or undefined when valid.
    * Trimmed non-empty; ≤32 chars; no line breaks; not the external sentinel or any of its localized names;
-   * not equal to the name or label of another account of the same vendor (excluding itself)
+   * not equal (case-insensitively) to the name or label of another account of the same vendor (excluding itself)
    */
   validate(label: string, name: string, existing: Array<{ name: string; label: string }>): string | undefined {
     const value = label.trim();
@@ -49,14 +49,19 @@ export class LabelStore {
     if (/[\r\n]/.test(value)) return t('label.newline');
     if (value === EXTERNAL_NAME || translationsOf('account.external').includes(value)) return t('name.reserved', { name: value });
     const others = existing.filter((a) => a.name !== name);
-    if (others.some((a) => a.name === value)) return t('label.dupName');
-    if (others.some((a) => a.label === value)) return t('name.dupLabel');
+    if (others.some((a) => sameName(a.name, value))) return t('label.dupName');
+    if (others.some((a) => sameName(a.label, value))) return t('name.dupLabel');
     return undefined;
   }
 
   private read(): Labels {
     return this.state.get<Labels>(this.key) ?? {};
   }
+}
+
+/** Account names and aliases are compared case-insensitively when checking for duplicates (`Work` and `work` clash) */
+export function sameName(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** Display name: the alias if set, otherwise the name; the external row gets its localized name; default is always shown as is (a stored alias is ignored) */
