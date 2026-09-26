@@ -1,7 +1,5 @@
 # Change Log
 
-## [Unreleased]
-
 ## [0.1.4] - 2026-09-27
 
 ### Added
@@ -18,6 +16,9 @@
 - Account lists, ignore lists and display names are now stored in `~/.config/planswap/state.json` inside the WSL distribution instead of VS Code's `globalState`, which lives on the Windows side and was shared by every distro (accounts of one distro showed up in, and were pruned by, another; aliases were mixed). Existing data is imported once on the first activation; the file is per distro and shared by every editor on it.
 - Copying folders (creating an independent account, unlinking, moving files across file systems) no longer uses `fs.cpSync`, which terminated the extension host when a folder in the default directory could not be read; such a folder now produces an ordinary error message.
 - Terminology: what the UI called a "shared account" is now a **linked account** (链接账号); independent accounts are unchanged. The add checkbox reads **Link to the default account's settings and history**, the row button **Link to the default account: …**, the badge "Linked to the default account's settings, rules, skills, history and sessions", the Tools row button **Re-link** (重新链接) and the Command Palette command **Re-link Accounts to the Default Account** (`planswap.tools.sync`). Confirmations, warnings and summaries use the same wording (e.g. "Re-linked N linked Claude account(s) to the default account.", "not linked for safety").
+- The rename pencil moved from the row's button group to right after the account name. It appears when the row is hovered or focused and stays on the last line of a wrapped name.
+- Renaming: a check-mark save button follows the input, and losing focus now saves instead of cancelling (Esc still cancels; an invalid name stays in edit mode with its reason). The card no longer shrinks while renaming.
+- Switching the Claude account from the panel (switch button, double-click, Enter) now asks for confirmation first. The Command Palette switch is unchanged.
 
 ## [0.1.3] - 2026-09-27
 

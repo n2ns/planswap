@@ -268,7 +268,11 @@ export function registerCommands(deps: Deps): vscode.Disposable[] {
     switch (msg.type) {
       case 'switch': {
         const a = panel.resolve(MODE, msg.dir);
-        if (a) await switchTo(a);
+        if (!a || isCurrent(a)) return;
+        // Panel entries (switch button, double-click, Enter) confirm first; the Command Palette pick is already explicit
+        const switchLabel = t('claude.switchButton');
+        const ok = await vscode.window.showInformationMessage(t('claude.switchConfirm', { label: labelOf(a) }), { modal: true }, switchLabel);
+        if (ok === switchLabel) await switchTo(a);
         return;
       }
       case 'terminal': {

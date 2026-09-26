@@ -250,8 +250,30 @@ body {
 /* When the name wraps, the avatar sticks to the top instead of floating in the middle */
 .row > .avatar { grid-area: avatar; align-self: start; }
 .row-main { display: contents; }
-.row-title { grid-area: title; display: flex; align-items: center; min-width: 0; }
+.row-title { grid-area: title; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .row-name { flex: 0 1 auto; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+/* The shared badge and the pencil sit inline in the name's text flow, so they follow the last line of a wrapped name */
+.name-tail { white-space: nowrap; }
+.name-tail > .shared-icon, .name-tail > .rename-btn { display: inline-grid; vertical-align: middle; }
+/* Rename pencil: 16px, same size as the badges; hidden until the row is hovered or has focus */
+.rename-btn {
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: -2px 0 0 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ease);
+}
+.rename-btn vscode-icon { color: inherit; }
+.row:hover .rename-btn, .row:focus-within .rename-btn { opacity: 1; }
+.rename-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.rename-btn:focus-visible { opacity: 1; outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 .row.is-current .row-name { font-size: 1.05em; font-weight: 700; }
 /* Current-account badge: 16px raised disc, light-to-dark gradient + top highlight + drop shadow; an outer ring of base color separates it from the card */
 .current-icon {
@@ -274,8 +296,8 @@ body {
 /* Shared-account badge: 16px flat disc right after the name, same size as the current-account badge */
 .shared-icon {
   flex: none;
-  /* Right margin keeps a gap to the current-account badge (margin-left: auto) when the name fills the line */
-  margin: 0 6px;
+  /* Inline after the name; the title's gap keeps it apart from the current-account badge */
+  margin: -2px 0 0 6px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -317,6 +339,10 @@ body {
   .row-tags { grid-area: tags; margin-top: 0; }
   .row-actions { grid-area: actions; align-self: center; margin-left: 4px; }
   .row-sub, .row-dir, .row-hint, .row-error { margin-top: 1px; }
+  /* Edit mode: the hidden button group keeps its column (so the email and hint lines keep their width and wrapping);
+     the edit line spans over the tags and that column, and the plan tag is hidden meanwhile */
+  .row.is-editing .row-title { grid-column: 2 / -1; }
+  .row.is-editing .row-tags { display: none; }
 }
 
 /* Rounded icon buttons: 24px everywhere */
@@ -382,8 +408,23 @@ body {
 
 /* ---------- Inline rename (not for the external directory row) ---------- */
 .row.is-editing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-/* Name line in edit mode: wrapped in the opaque editor background so it keeps contrast on plan-colored gradient cards */
-.row.is-editing .row-title { display: block; padding: 2px; border-radius: 6px; background: var(--vscode-editor-background); }
+/* Name line in edit mode: keeps the height the name line had before editing (--rename-h, set by the frontend), so the
+   card does not change height. The 26px field (fixed by the component) is centered in it; when the name line was
+   shorter (a single line, 18px), the negative block margin lets the field overhang into the row padding and the gap
+   above the email line. The opaque editor background keeps contrast on plan-colored gradient cards */
+.row.is-editing .row-title {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--rename-h, 18px);
+  /* Shifted up 2px (top and bottom margins still sum to the same) so the focus glow clears the email line */
+  --rename-overhang: min(0px, (var(--rename-h, 18px) - 26px) / 2);
+  margin: calc(var(--rename-overhang) - 2px) 0 calc(var(--rename-overhang) + 2px);
+  border-radius: 5px;
+  background: var(--vscode-editor-background);
+}
+/* The button group keeps its space (narrow: the height of the last line; wide: its column) but is invisible and cannot be clicked or focused */
+.row.is-editing .row-actions { visibility: hidden; }
 /* Field: theme input background + accent border; 2px border + glow when focused; 26px tall (24px component + border) */
 .rename-field {
   display: block;
@@ -399,6 +440,9 @@ body {
   font-weight: 600;
   transition: box-shadow var(--ease);
 }
+/* In the edit line the field takes the remaining width next to the save button */
+.row-title > .rename-field { flex: 1 1 0; width: auto; }
+.rename-save { flex: none; --vscode-icon-foreground: var(--accent); }
 .rename-field[focused] { box-shadow: 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent); }
 .rename-field[invalid][focused] { box-shadow: 0 0 0 1px var(--error), 0 0 0 3px color-mix(in srgb, var(--error) 35%, transparent); }
 .row.is-editing:has(.rename-field[invalid]) { border-color: var(--error); box-shadow: 0 0 0 1px var(--error); }

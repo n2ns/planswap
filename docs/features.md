@@ -90,13 +90,13 @@ Row buttons are always shown (semi-transparent normally, fully opaque on mouse h
 | `terminal` run claude with this account in a terminal | Open terminal (see 4.4) | Signed-in rows (including the external-directory row) |
 | Text button "Log in" | Opens a terminal running claude to sign in (see 4.4) | Signed-out rows (including the external-directory row), always prominent |
 | `trash` remove account | Enters the inline remove confirmation (see 4.3) | Only rows that are not default, not external and not current |
-| Pencil icon "Rename" | Enters inline rename (see 2.7) | Named account rows only (not the default row or the external-directory row) |
 | `link` "Link to the default account: its settings, rules, skills, history and sessions move into the default account and are linked from then on; the login stays separate" | Converts the account into a shared one after a modal confirmation (see 4.6) | Independent named accounts that are not current |
 | `debug-disconnect` "Unlink from the default account: the links are removed and the account gets its own copy of the default configuration; history and sessions stay in the default account" | Converts the account back into an independent one after a modal confirmation (see 4.7) | Shared named accounts that are not current |
 
 Other interactions:
 
-- Double-clicking a non-current row, or focusing a non-current row with Tab and pressing Enter, also switches to that account.
+- Double-clicking a non-current row, or focusing a non-current row with Tab and pressing Enter, also switches to that account (after the same confirmation as the switch button).
+- Rename: a small pencil icon right after the name (after the link badge) of named account rows only (not the default row or the external-directory row). It appears when the row is hovered or has focus and enters inline rename (see 2.7). It stays on the last line of a wrapped name, together with the name's last character.
 - A single click on the row does nothing, to avoid accidental actions; the current row is not focusable.
 
 ### 2.4 Inline remove confirmation
@@ -124,9 +124,9 @@ Only one: `$(refresh)` refresh (`planswap.refresh`), which refreshes both the Cl
 
 ### 2.7 Inline rename
 
-After clicking the pencil icon of a named account row, the row's name turns into an input (prefilled with the current display name, fully selected); the edit state is keyed by the row's directory (`dir`), and only one row per page can be in edit state at a time. Edit state styling: the row outline turns to the accent color; the name line is wrapped in an opaque editor-background layer, the input uses the theme input background + accent outline and bold text, with a 1px outline plus a 3px glow when focused; when validation fails the outline and glow switch to the error color and the reason is shown in red inline. In edit state the row hides its button group and the check-mark badge.
+After clicking the pencil icon after the name of a named account row, the row's name turns into an input (prefilled with the current display name, fully selected); the edit state is keyed by the row's directory (`dir`), and only one row per page can be in edit state at a time. Edit state styling: the row outline turns to the accent color; the name line is wrapped in an opaque editor-background layer, the input uses the theme input background + accent outline and bold text, with a 1px outline plus a 3px glow when focused; when validation fails the outline and glow switch to the error color and the reason is shown in red inline. In edit state the row hides its button group and the check-mark badge, and a save button (check icon) follows the input. The card keeps its height: the button group keeps its space while invisible, and the input takes the height the name had (on wide panels the plan tag is hidden while editing).
 
-- Enter submits `rename` (with `mode`, the row's `dir` and the new display name `label`); Esc cancels and restores the row; losing focus also cancels (except while waiting for the host's result).
+- Enter, the save button and losing focus all save: they submit `rename` (with `mode`, the row's `dir` and the new display name `label`). An unchanged name just leaves edit mode; an invalid name stays in edit mode with the reason shown (losing focus does not discard the typed text). Esc cancels and restores the row.
 - The extension first looks the row up by `dir` among the page's account rows and only accepts named accounts (the default row and the external-directory row cannot be renamed), then validates (the extension is authoritative, the frontend only gives immediate hints); on failure the reason is shown in red inline:
   - empty after trim: "Enter a display name";
   - more than 32 characters: "Display name can be at most 32 characters";
@@ -159,6 +159,7 @@ Entry points:
 Flow:
 
 1. The target already is the current account → return without doing anything. A named target whose directory does not exist → error "Account directory does not exist: <dir>", nothing is changed.
+   From the panel, a modal confirmation comes first: "Switch the Claude account to X? New sessions will use it; sessions already open keep the current account until the window is reloaded." with the button "Switch" (Chinese: "将 Claude 账号切换到 X？…" / "切换"); cancelling does nothing. The Command Palette pick has no extra confirmation.
    When the target is a shared account, its links are first re-created or repaired and the default account's `.claude.json` is mirrored into it (as "Re-link" does, see section 5); anything that needs attention (entries kept as the account's own, entries not linked for safety, errors) only shows the warning "Re-linking X to the default account reported: …", and the switch still happens.
 2. Read `claudeCode.environmentVariables` and build a **new array**: keep all other entries, remove every `CLAUDE_CONFIG_DIR` entry; when the target is not the default account, append `{ "name": "CLAUDE_CONFIG_DIR", "value": "<absolute path>" }`. The path contains no `~` and no trailing slash. When the original value is in object form, it is written back as an array.
 3. Write with `ConfigurationTarget.Global`. In a WSL window this writes to the WSL remote Machine settings.

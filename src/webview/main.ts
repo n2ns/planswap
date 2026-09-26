@@ -83,6 +83,23 @@ function toolbarButton(icon: string, label: string, fn: (e: MouseEvent) => void)
   return onClick(h('vscode-toolbar-button', { icon, label, title: label, class: 'icon-btn' }), fn);
 }
 
+/** Sets --rename-h (the name line's height before editing) on the edit line; unknown keeps the CSS default */
+function withHeight(el: HTMLElement, px: number | undefined): HTMLElement {
+  if (px) el.style.setProperty('--rename-h', `${px}px`);
+  return el;
+}
+
+/**
+ * The name text followed by its inline icons: the last character and the icons share a nowrap span, so the icons
+ * never wrap onto a line of their own and always follow the last line of a wrapped name
+ */
+function nameWithTail(label: string, ...icons: Child[]): Child[] {
+  if (!icons.some(Boolean)) return [label];
+  const chars = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(label)].map((g) => g.segment);
+  const last = chars.pop() ?? '';
+  return [chars.join(''), h('span', { class: 'name-tail' }, last, ...icons)];
+}
+
 // Avatar color: a theme chart color picked stably from the account name
 const AVATAR_COLORS = ['blue', 'green', 'purple', 'orange', 'yellow', 'red'];
 function avatar(a: AccountView): HTMLElement {
@@ -152,6 +169,8 @@ class Page {
   private confirmingDir?: string;
   // Inline rename state (keyed by dir, one row at a time): the field is created once and reused across re-renders to keep input and focus
   private renamingDir?: string;
+  // Height of the row's name line before editing; the edit line keeps it so the card does not change height
+  private renameTitleHeight?: number;
   private renameField?: TextField;
   private renameError?: string;
   // Re-rendering moves the field node and fires blur, which must not count as cancel
@@ -257,7 +276,7 @@ class Page {
   }
 
   // ---------- Inline rename (not for the external directory) ----------
-  private startRename(a: AccountView): void {
+  private startRename(a: AccountView, titleHeight?: number): void {
     const field = h('vscode-textfield', { class: 'rename-field', 'aria-label': t('rename.ariaLabel'), value: a.label }) as TextField;
     field.value = a.label;
     field.addEventListener('input', () => {
@@ -270,20 +289,21 @@ class Page {
       if (isComposing(e as KeyboardEvent)) return;
       if (key === 'Enter') {
         e.preventDefault();
-        this.submitRename();
+        this.commitRename();
       } else if (key === 'Escape') {
         e.preventDefault();
         this.stopRename();
         this.render();
       }
     });
+    // Blur saves too, like the Explorer's inline rename (re-renders and a pending save are ignored)
     field.addEventListener('blur', () => {
       if (this.rendering || this.submitting || this.renameField !== field) return;
-      this.stopRename();
-      this.render();
+      this.commitRename();
     });
     this.renamingDir = a.dir;
     this.renameField = field;
+    this.renameTitleHeight = titleHeight;
     this.renameError = undefined;
     this.render();
     // The component's first render is async; wait a frame before focusing and selecting all
@@ -291,6 +311,14 @@ class Page {
       field.focus();
       field.shadowRoot?.querySelector('input')?.select();
     });
+  }
+
+  // Save button after the rename field; mousedown keeps the focus in the field so the click, not a blur, saves
+  private renameSaveButton(): HTMLElement {
+    const button = toolbarButton('check', t('rename.save'), () => this.commitRename());
+    button.classList.add('rename-save');
+    button.addEventListener('mousedown', (e) => e.preventDefault());
+    return button;
   }
 
   private stopRename(): void {
@@ -307,6 +335,21 @@ class Page {
     if (/[\r\n]/.test(value)) return t('validate.labelNewline');
     if (this.tab.accounts.some((a) => a.dir !== self.dir && (sameName(a.name, value) || sameName(a.label, value)))) return t('validate.labelDuplicate');
     return undefined;
+  }
+
+  /**
+   * Save action of Enter, blur and the save button: an unchanged value just leaves edit mode without a message;
+   * otherwise submitRename (an invalid value stays in edit mode with its reason)
+   */
+  private commitRename(): void {
+    const self = this.tab.accounts.find((a) => a.dir === this.renamingDir);
+    if (this.submitting || !this.renameField || !self) return;
+    if (this.renameField.value.trim() === self.label) {
+      this.stopRename();
+      this.render();
+      return;
+    }
+    this.submitRename();
   }
 
   private submitRename(): void {
@@ -447,9 +490,9 @@ class Page {
     const editing = this.renamingDir === a.dir && !!this.renameField;
     if (editing) classes.push('is-editing');
 
+    // Built in edit mode too: CSS hides it there (visibility: hidden) so the card keeps its height and columns
     const actions = h('div', { class: 'row-actions' });
-    if (!editing) {
-      if (a.kind === 'named') actions.append(toolbarButton('edit', t('row.rename'), () => this.startRename(a)));
+    {
       // Conversions are refused by the host for the current account and for the Codex account selected but not yet effective
       const convertible = a.kind === 'named' && !a.isCurrent && !(this.mode === 'codex' && this.tab.pendingDir === a.dir);
       // Independent account: offer converting it to a shared one (the host confirms)
@@ -495,7 +538,23 @@ class Page {
     // Shared account: a link badge right after the name
     const sharedIcon =
       a.kind === 'named' && a.shared === true && !editing && h('span', { class: 'shared-icon', title: t('account.sharedBadge'), role: 'img', 'aria-label': t('account.sharedBadge') }, h('vscode-icon', { name: 'link', size: '10' }));
-    const title = editing ? h('div', { class: 'row-title' }, this.renameField!) : h('div', { class: 'row-title' }, h('span', { class: 'row-name' }, a.label), sharedIcon, currentIcon);
+    // Named account: a small pencil after the name (and the shared badge), shown on row hover / focus; it follows the
+    // last line of a wrapped name because it is inline in the name's text flow
+    const renameButton =
+      a.kind === 'named' &&
+      !editing &&
+      onClick(
+        h('button', { type: 'button', class: 'rename-btn', title: t('row.rename'), 'aria-label': `${t('row.rename')} ${a.label}` }, h('vscode-icon', { name: 'edit', size: '12' })),
+        (e) => this.startRename(a, (e.currentTarget as HTMLElement).closest('.row-title')?.getBoundingClientRect().height),
+      );
+    const title = editing
+      ? withHeight(h('div', { class: 'row-title' }, this.renameField!, this.renameSaveButton()), this.renameTitleHeight)
+      : h(
+          'div',
+          { class: 'row-title' },
+          h('span', { class: 'row-name' }, ...nameWithTail(a.label, sharedIcon, renameButton)),
+          currentIcon,
+        );
     // Line 3: tags on the left + action buttons on the right; on wide panels CSS moves them back to line 1 and the right side
     const tags = h('div', { class: 'row-tags' }, planPill(a), !a.loggedIn && h('span', { class: 'pill warn' }, t('account.notLoggedIn')));
 
@@ -511,7 +570,7 @@ class Page {
         loginStatus(a),
         // The current account gets an extra line with its directory
         a.isCurrent && h('div', { class: 'row-dir' }, a.dirLabel),
-        !editing && h('div', { class: 'row-foot' }, tags, actions),
+        h('div', { class: 'row-foot' }, tags, actions),
         !a.loggedIn && !a.isCurrent && h('div', { class: 'row-hint' }, t(`${this.mode}.loginHint`)),
         editing && this.renameError && h('div', { class: 'row-error', role: 'alert' }, this.renameError),
       ),
